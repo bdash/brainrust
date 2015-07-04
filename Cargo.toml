@@ -1,0 +1,4 @@
+[package]
+name = "brainrust"
+version = "0.1.0"
+authors = ["Mark Rowe <mrowe@bdash.net.nz>"]
