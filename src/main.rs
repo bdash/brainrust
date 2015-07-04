@@ -52,7 +52,7 @@ impl Instruction {
       ',' => Some(Instruction::Input),
       '[' => Some(Instruction::LoopStart { end: None }),
       ']' => Some(Instruction::LoopEnd { start: None }),
-      _ => { /* println!("Unknown instruction {:?}", token as char); */ None }
+      _ => None
     }
   }
 }
@@ -144,23 +144,30 @@ unsafe fn execute(instructions: Vec<LinkedInstruction>) {
 
 //    println!("{:?}", instruction);
     match *instruction {
-      LinkedInstruction::Add(amount) => tape[tape_head] = tape.get_unchecked(tape_head).wrapping_add(amount),
-      LinkedInstruction::Subtract(amount) => tape[tape_head] = tape.get_unchecked(tape_head).wrapping_sub(amount),
       LinkedInstruction::MoveLeft(amount) => tape_head -= amount,
       LinkedInstruction::MoveRight(amount) => tape_head += amount,
+
+      LinkedInstruction::Add(amount) => {
+        let value = tape.get_unchecked_mut(tape_head);
+        *value = value.wrapping_add(amount);
+      }
+      LinkedInstruction::Subtract(amount) => {
+        let value = tape.get_unchecked_mut(tape_head);
+        *value = value.wrapping_sub(amount);
+      }
 
       LinkedInstruction::LoopStart { end } => {
         if *tape.get_unchecked(tape_head) == 0 {
           ip = end + 1;
           continue
         }
-      },
+      }
       LinkedInstruction::LoopEnd { start } => {
         if *tape.get_unchecked(tape_head) != 0 {
           ip = start + 1;
           continue
         }
-      },
+      }
       LinkedInstruction::Output => {
         let c = *tape.get_unchecked(tape_head);
         output.push(c);
