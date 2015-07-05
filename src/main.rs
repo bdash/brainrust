@@ -134,15 +134,13 @@ fn link(source: Vec<Instruction>) -> Vec<LinkedInstruction> {
 
 #[inline(never)]
 unsafe fn execute(instructions: Vec<LinkedInstruction>) {
-//  println!("{:?}", instructions);
   let mut output = Vec::with_capacity(256);
-  let mut tape = vec![0u8; 3000];
+  let mut tape = vec![0u8; 1024];
   let mut tape_head = 0;
   let mut ip = 0;
   while ip < instructions.len() {
     let instruction = instructions.get_unchecked(ip);
 
-//    println!("{:?}", instruction);
     match *instruction {
       LinkedInstruction::MoveLeft(amount) => tape_head -= amount,
       LinkedInstruction::MoveRight(amount) => tape_head += amount,
@@ -179,6 +177,9 @@ unsafe fn execute(instructions: Vec<LinkedInstruction>) {
       _ => std::intrinsics::unreachable(),
     }
     ip += 1
+  }
+  if output.len() > 0 {
+    stdout().write(&output[..]).unwrap();
   }
 }
 
