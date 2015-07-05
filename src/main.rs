@@ -1,13 +1,17 @@
-#![feature(vecmap, core_intrinsics)]
+#![feature(vecmap, core_intrinsics, libc)]
 
 extern crate itertools;
+extern crate libc;
 
 use std::collections::VecMap;
+use std::fs::{File, OpenOptions};
 use std::io::{Result, Read, Write, stdout};
-use std::fs::File;
+use std::mem;
 use std::path::Path;
-use itertools::Itertools;
+use std::ptr;
 
+use itertools::Itertools;
+use libc::{c_void, mmap, mprotect, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};
 
 #[inline(never)]
 fn load_file(input_file_path: &str) -> Result<Vec<u8>> {
@@ -15,6 +19,12 @@ fn load_file(input_file_path: &str) -> Result<Vec<u8>> {
   let mut contents: Vec<u8> = Vec::new();
   try!(file.read_to_end(&mut contents));
   Ok(contents)
+}
+
+fn write_to_file(file_path: &str, buffer: &Vec<u8>) -> Result<()> {
+  let mut file = try!(OpenOptions::new().write(true).create(true).truncate(true).open(&Path::new(file_path)));
+  try!(file.write_all(&buffer[..]));
+  Ok(())
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -183,8 +193,137 @@ unsafe fn execute(instructions: Vec<LinkedInstruction>) {
   }
 }
 
+#[inline(never)]
+unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
+  let buffer_size = (instructions.len() * 32) as u64;
+  let buffer = mmap(ptr::null::<u8>() as *mut libc::c_void, buffer_size, PROT_WRITE, MAP_ANON | MAP_PRIVATE, 0, 0);
+
+  let prologue = vec![
+    0x55, // push %rbp
+    0x48, 0x89, 0xe5, // mov %rsp, %rbp
+    0x48, 0x81, 0xec, 0xff, 0x0f, 0x00, 0x00, // subq  $0xfff, %rsp
+
+    0x48, 0x8d, 0xbd, 0xf0, 0xfb, 0xff, 0xff, // leaq -1040(%rbp), %rdi
+    0x48, 0xc7, 0xc1, 0x00, 0x04, 0x00, 0x00, // mov $1024, %rcx
+    0xf3, 0xaa, // rep stosb
+    0x48, 0x89, 0xf8, // mov %rdi, %rax
+    0x48, 0x2d, 0x00, 0x04, 0x00, 0x00, // subl $1024, %rax
+  ];
+
+  let mut body = Vec::new();
+  let mut loop_start_patch_points = VecMap::new();
+  for (i, &instruction) in instructions.iter().enumerate() {
+
+    match instruction {
+      LinkedInstruction::MoveLeft(amount) => {
+        assert!(amount < 255);
+        if amount > 1 {
+          body.extend(vec![
+            0x48, 0x83, 0xe8, amount as u8, // subq $amount, %rax
+          ]);
+        } else {
+          body.extend(vec![
+            0x48, 0xff, 0xc8 // decq %rax
+          ]);
+        }
+      }
+      LinkedInstruction::MoveRight(amount) => {
+        assert!(amount < 255);
+        if amount > 1 {
+          body.extend(vec![
+            0x48, 0x83, 0xc0, amount as u8, // addq $amount, %rax
+          ]);
+        } else {
+          body.extend(vec![
+            0x48, 0xff, 0xc0, // inc %rax
+          ]);
+        }
+      }
+      LinkedInstruction::Add(amount) => {
+        assert!(amount < 255);
+        if amount > 1 {
+          body.extend(vec![
+            0x80, 0x00, amount as u8, // addq $amount, (%rax)
+          ]);
+        } else {
+          body.extend(vec![
+            0x48, 0xff, 0x00, // inc (%rax)
+          ]);
+        }
+      }
+      LinkedInstruction::Subtract(amount) => {
+        assert!(amount < 255);
+        if amount > 1 {
+          body.extend(vec![
+            0x80, 0x28, amount as u8, // addq $amount, (%rax)
+          ]);
+        } else {
+          body.extend(vec![
+            0x48, 0xff, 0x08, // sub (%rax)
+          ]);
+        }
+      }
+      LinkedInstruction::LoopStart { end: _ } => {
+        body.extend(vec![
+          0x80, 0x38, 0x00, // cmpb $0, (%rax)
+          0x0f, 0x84, 0xff, 0xff, 0xff, 0xff, // jz placeholder
+        ]);
+        loop_start_patch_points.insert(i, body.len() - 4);
+      }
+      LinkedInstruction::LoopEnd { start } => {
+        let loop_start_patch_point = loop_start_patch_points[start];
+        let distance = body.len() - loop_start_patch_point + 5;
+        let offset = -(distance as i64);
+
+        body.extend(vec![
+          0x80, 0x38, 0x00, // cmpb $0, (%rax)
+          0x0f, 0x85, // jnz offset
+          ((offset >>  0) & 0xff) as u8,
+          ((offset >>  8) & 0xff) as u8,
+          ((offset >> 16) & 0xff) as u8,
+          ((offset >> 24) & 0xff) as u8,
+        ]);
+
+        body[loop_start_patch_point + 0] = ((distance >>  0) & 0xff) as u8;
+        body[loop_start_patch_point + 1] = ((distance >>  8) & 0xff) as u8;
+        body[loop_start_patch_point + 2] = ((distance >> 16) & 0xff) as u8;
+        body[loop_start_patch_point + 3] = ((distance >> 24) & 0xff) as u8;
+      }
+      LinkedInstruction::Output => {
+        body.extend(vec![
+          0x50, // push %rax
+          0x48, 0x89, 0xc6, // mov %rax, $rsi
+          0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdi
+          0x48, 0xc7, 0xc2, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdx
+          0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x02, // mov $0x2000004, %rax
+          0x0f, 0x05, // syscall
+          0x58, // pop %rax
+        ]);
+      }
+      _ => { println!("{:?}", instruction); panic!() }
+    }
+  }
+
+  let epilogue = vec![
+    0x48, 0x31, 0xc0, // xor %rax, %rax
+    0x48, 0x81, 0xc4, 0xff, 0x0f, 0x00, 0x00, // addq $0xfff, %rsp
+    0x5d, // pop %rbp
+    0xc3, // ret
+  ];
+
+  let machine_code: Vec<u8> = prologue.into_iter().chain(body).chain(epilogue).collect();
+  write_to_file("out.dat", &machine_code).unwrap();
+
+  ptr::copy(machine_code.as_ptr(), buffer as *mut u8, machine_code.len());
+  mprotect(buffer, buffer_size, PROT_EXEC);
+
+  let function: extern "C" fn() -> libc::c_void = mem::transmute(buffer);
+  function();
+}
+
 fn main() {
   let source = load_file("input.bf").unwrap();
   let instructions = link(optimize(compile(source)));
+  unsafe { jit(&instructions) };
   unsafe { execute(instructions) };
 }
