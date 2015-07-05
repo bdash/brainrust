@@ -220,13 +220,8 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
   let prologue = vec![
     0x55, // push %rbp
     0x48, 0x89, 0xe5, // mov %rsp, %rbp
-    0x48, 0x81, 0xec, 0xff, 0x0f, 0x00, 0x00, // subq  $0xfff, %rsp
 
-    0x48, 0x8d, 0xbd, 0xf0, 0xfb, 0xff, 0xff, // leaq -1040(%rbp), %rdi
-    0x48, 0xc7, 0xc1, 0x00, 0x04, 0x00, 0x00, // mov $1024, %rcx
-    0xf3, 0xaa, // rep stosb
     0x48, 0x89, 0xf8, // mov %rdi, %rax
-    0x48, 0x2d, 0x00, 0x04, 0x00, 0x00, // subl $1024, %rax
   ];
 
   let mut body = Vec::new();
@@ -325,7 +320,6 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
 
   let epilogue = vec![
     0x48, 0x31, 0xc0, // xor %rax, %rax
-    0x48, 0x81, 0xc4, 0xff, 0x0f, 0x00, 0x00, // addq $0xfff, %rsp
     0x5d, // pop %rbp
     0xc3, // ret
   ];
@@ -337,8 +331,10 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
   ptr::copy(machine_code.as_ptr(), map.buffer as *mut u8, machine_code.len());
   map.reprotect(PROT_EXEC);
 
-  let function: extern "C" fn() -> libc::c_void = mem::transmute(map.buffer);
-  function();
+  let function: extern "C" fn(*mut u8) -> libc::c_void = mem::transmute(map.buffer);
+
+  let tape = &mut [0u8;1024];
+  function(tape.as_mut_ptr());
 }
 
 fn main() {
