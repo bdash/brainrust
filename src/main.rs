@@ -11,7 +11,7 @@ use std::path::Path;
 use std::ptr;
 
 use itertools::Itertools;
-use libc::{c_void, mmap, mprotect, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};
+use libc::{c_void, mmap, mprotect, munmap, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};
 
 #[inline(never)]
 fn load_file(input_file_path: &str) -> Result<Vec<u8>> {
@@ -193,11 +193,30 @@ unsafe fn execute(instructions: Vec<LinkedInstruction>) {
   }
 }
 
+struct MemoryMap {
+  size: u64,
+  buffer: *mut libc::c_void,
+}
+
+impl MemoryMap {
+  unsafe fn new(size: usize, protection: i32) -> MemoryMap {
+    let buffer = mmap(ptr::null::<u8>() as *mut libc::c_void, size as u64, protection, MAP_ANON | MAP_PRIVATE, 0, 0);
+    MemoryMap { size: size as u64, buffer: buffer }
+  }
+
+  unsafe fn reprotect(&self, protection: i32) {
+    mprotect(self.buffer, self.size, protection);
+  }
+}
+
+impl Drop for MemoryMap {
+  fn drop(&mut self) {
+    unsafe { munmap(self.buffer, self.size) };
+  }
+}
+
 #[inline(never)]
 unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
-  let buffer_size = (instructions.len() * 32) as u64;
-  let buffer = mmap(ptr::null::<u8>() as *mut libc::c_void, buffer_size, PROT_WRITE, MAP_ANON | MAP_PRIVATE, 0, 0);
-
   let prologue = vec![
     0x55, // push %rbp
     0x48, 0x89, 0xe5, // mov %rsp, %rbp
@@ -314,10 +333,11 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
   let machine_code: Vec<u8> = prologue.into_iter().chain(body).chain(epilogue).collect();
   write_to_file("out.dat", &machine_code).unwrap();
 
-  ptr::copy(machine_code.as_ptr(), buffer as *mut u8, machine_code.len());
-  mprotect(buffer, buffer_size, PROT_EXEC);
+  let map = MemoryMap::new(machine_code.len(), PROT_WRITE);
+  ptr::copy(machine_code.as_ptr(), map.buffer as *mut u8, machine_code.len());
+  map.reprotect(PROT_EXEC);
 
-  let function: extern "C" fn() -> libc::c_void = mem::transmute(buffer);
+  let function: extern "C" fn() -> libc::c_void = mem::transmute(map.buffer);
   function();
 }
 
