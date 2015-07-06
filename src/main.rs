@@ -221,7 +221,14 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
     0x55, // push %rbp
     0x48, 0x89, 0xe5, // mov %rsp, %rbp
 
+    // %rax is the tape head pointer.
     0x48, 0x89, 0xf8, // mov %rdi, %rax
+
+    // %rbx is the output buffer insertion pointer.
+    0x48, 0x89, 0xf3, // mov %rsi, %rbx
+
+    // %r12 is the output buffer base.
+    0x49, 0x89, 0xf4, // mov %rsi, %r12
   ];
 
   let mut body = Vec::new();
@@ -305,12 +312,30 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
       }
       LinkedInstruction::Output => {
         body.extend(vec![
+          // Append byte to output buffer.
+          0x44, 0x8a, 0x28, // movb (%rax), %r13b
+          0x44, 0x88, 0x2b, // movb %r13b, (%rbx)
+          0x48, 0xff, 0xc3, // inc %rbx
+
+          // Don't call write until we see a newline character.
+          0x41, 0x80, 0xfd, 0x0a, // cmp $10, %r13b
+          0x75, 0x1e, // jneq +30
+
           0x50, // push %rax
-          0x48, 0x89, 0xc6, // mov %rax, $rsi
+
+          // Compute the number of bytes to write.
+          0x48, 0x89, 0xda, // movq %rbx, %rdx
+          0x4c, 0x29, 0xe2, // subq %r12, %rdx
+
+          // Write bytes from %r12 to stdout.
+          0x4c, 0x89, 0xe6, // mov %r12, %rsi
           0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdi
-          0x48, 0xc7, 0xc2, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdx
           0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x02, // mov $0x2000004, %rax
           0x0f, 0x05, // syscall
+
+          // Reset the output buffer tail to the start.
+          0x4c, 0x89, 0xe3, // mov %r12, %rbx
+
           0x58, // pop %rax
         ]);
       }
@@ -319,7 +344,20 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
   }
 
   let epilogue = vec![
-    0x48, 0x31, 0xc0, // xor %rax, %rax
+    // Compute the number of bytes to write.
+    0x48, 0x89, 0xda, // movq %rbx, %rdx
+    0x4c, 0x29, 0xe2, // subq %r12, %rdx
+
+    // Don't call write if we have nothing in the output buffer.
+    0x74, 0x13, // jeq +19
+
+    // Write bytes from %r12 to stdout.
+    0x4c, 0x89, 0xe6, // mov %r12, %rsi
+    0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdi
+    0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x02, // mov $0x2000004, %rax
+    0x0f, 0x05, // syscall
+
+    0x48, 0x31, 0xc0, // xor %rax, %rax (jump target)
     0x5d, // pop %rbp
     0xc3, // ret
   ];
@@ -331,10 +369,13 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
   ptr::copy(machine_code.as_ptr(), map.buffer as *mut u8, machine_code.len());
   map.reprotect(PROT_EXEC);
 
-  let function: extern "C" fn(*mut u8) -> libc::c_void = mem::transmute(map.buffer);
+  println!("Generated {:?} bytes of machine code to {:?}.", machine_code.len(), map.buffer);
+
+  let function: extern "C" fn(*mut u8, *mut u8) -> u64 = mem::transmute(map.buffer);
 
   let tape = &mut [0u8;1024];
-  function(tape.as_mut_ptr());
+  let output_buffer = &mut [0u8;256];
+  function(tape.as_mut_ptr(), output_buffer.as_mut_ptr());
 }
 
 fn main() {
