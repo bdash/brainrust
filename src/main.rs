@@ -84,12 +84,12 @@ impl LinkedInstruction {
 }
 
 #[inline(never)]
-fn compile(source: Vec<u8>) -> Vec<Instruction> {
+fn compile_to_bytecode(source: Vec<u8>) -> Vec<Instruction> {
   source.into_iter().filter_map(Instruction::from_token).collect()
 }
 
 #[inline(never)]
-fn optimize(instructions: Vec<Instruction>) -> Vec<Instruction> {
+fn optimize_bytecode(instructions: Vec<Instruction>) -> Vec<Instruction> {
   instructions.iter().group_by(|&instruction| instruction).flat_map(|(&key, group)| {
     match key {
       Instruction::MoveLeft(_) => vec![Instruction::MoveLeft(group.len())],
@@ -110,7 +110,7 @@ fn optimize(instructions: Vec<Instruction>) -> Vec<Instruction> {
 }
 
 #[inline(never)]
-fn link(source: Vec<Instruction>) -> Vec<LinkedInstruction> {
+fn link_bytecode(source: Vec<Instruction>) -> Vec<LinkedInstruction> {
   let mut loop_starts = Vec::new();
   let mut loop_ends = VecMap::new();
   let phase1: Vec<(usize, Instruction)>;
@@ -143,7 +143,7 @@ fn link(source: Vec<Instruction>) -> Vec<LinkedInstruction> {
 }
 
 #[inline(never)]
-unsafe fn execute(instructions: Vec<LinkedInstruction>) {
+unsafe fn execute_bytecode(instructions: &Vec<LinkedInstruction>) {
   let mut output = Vec::with_capacity(256);
   let mut tape = vec![0u8; 1024];
   let mut tape_head = 0;
@@ -216,7 +216,7 @@ impl Drop for MemoryMap {
 }
 
 #[inline(never)]
-unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
+fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
   let prologue = vec![
     0x55, // push %rbp
     0x48, 0x89, 0xe5, // mov %rsp, %rbp
@@ -362,14 +362,17 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
     0xc3, // ret
   ];
 
-  let machine_code: Vec<u8> = prologue.into_iter().chain(body).chain(epilogue).collect();
+  prologue.into_iter().chain(body).chain(epilogue).collect::<Vec<u8>>()
+}
+
+unsafe fn execute_machinecode(machine_code: &Vec<u8>) {
   write_to_file("out.dat", &machine_code).unwrap();
 
   let map = MemoryMap::new(machine_code.len(), PROT_WRITE);
   ptr::copy(machine_code.as_ptr(), map.buffer as *mut u8, machine_code.len());
   map.reprotect(PROT_EXEC);
 
-  println!("Generated {:?} bytes of machine code to {:?}.", machine_code.len(), map.buffer);
+  println!("Copied {:?} bytes of machine code to executable region at {:?}.", machine_code.len(), map.buffer);
 
   let function: extern "C" fn(*mut u8, *mut u8) -> u64 = mem::transmute(map.buffer);
 
@@ -380,7 +383,8 @@ unsafe fn jit(instructions: &Vec<LinkedInstruction>) {
 
 fn main() {
   let source = load_file("input.bf").unwrap();
-  let instructions = link(optimize(compile(source)));
-  unsafe { jit(&instructions) };
-  unsafe { execute(instructions) };
+  let bytecode = link_bytecode(optimize_bytecode(compile_to_bytecode(source)));
+  let machine_code = compile_to_machinecode(&bytecode);
+  unsafe { execute_machinecode(&machine_code) };
+  unsafe { execute_bytecode(&bytecode) };
 }
