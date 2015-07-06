@@ -1,10 +1,9 @@
-#![feature(vecmap, core_intrinsics, libc)]
-
 extern crate argparse;
 extern crate itertools;
 extern crate libc;
+extern crate unreachable;
+extern crate vec_map;
 
-use std::collections::VecMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Result, Read, Write, stdout};
 use std::mem;
@@ -14,6 +13,8 @@ use std::ptr;
 use argparse::{ArgumentParser, StoreConst, Store};
 use itertools::Itertools;
 use libc::{c_void, mmap, mprotect, munmap, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};
+use vec_map::VecMap;
+use unreachable::unreachable;
 
 #[inline(never)]
 fn load_file(input_file_path: &str) -> Result<Vec<u8>> {
@@ -186,7 +187,7 @@ unsafe fn execute_bytecode(instructions: &Vec<LinkedInstruction>) {
           output.clear();
         }
       }
-      _ => std::intrinsics::unreachable(),
+      _ => unreachable(),
     }
     ip += 1
   }
