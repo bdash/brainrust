@@ -2,8 +2,14 @@
 name = "brainrust"
 version = "0.1.0"
 dependencies = [
+ "argparse 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.3.21 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "argparse"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "itertools"

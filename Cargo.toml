@@ -5,3 +5,4 @@ authors = ["Mark Rowe <mrowe@bdash.net.nz>"]
 
 [dependencies]
 itertools = "0.3.21"
+argparse = "0.2.0"

@@ -1,5 +1,6 @@
 #![feature(vecmap, core_intrinsics, libc)]
 
+extern crate argparse;
 extern crate itertools;
 extern crate libc;
 
@@ -10,6 +11,7 @@ use std::mem;
 use std::path::Path;
 use std::ptr;
 
+use argparse::{ArgumentParser, StoreConst, Store};
 use itertools::Itertools;
 use libc::{c_void, mmap, mprotect, munmap, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};
 
@@ -381,10 +383,31 @@ unsafe fn execute_machinecode(machine_code: &Vec<u8>) {
   function(tape.as_mut_ptr(), output_buffer.as_mut_ptr());
 }
 
+#[derive(Copy, Clone)]
+enum ExecutionModel {
+  Interpret,
+  JIT,
+}
+
 fn main() {
-  let source = load_file("input.bf").unwrap();
+  let mut execution_model = ExecutionModel::JIT;
+  let mut input_file_path: String = "input.bf".to_string();
+  {
+    let mut ap = ArgumentParser::new();
+    ap.set_description("A BrainFuck interpreter in Rust");
+    ap.refer(&mut execution_model).add_option(&["-i", "--interpret"], StoreConst(ExecutionModel::Interpret), "Use the interpreter");
+    ap.refer(&mut input_file_path).add_argument("script", Store, "BrainFuck script to execute.");
+    ap.parse_args_or_exit();
+  }
+
+  let source = load_file(&input_file_path).unwrap();
   let bytecode = link_bytecode(optimize_bytecode(compile_to_bytecode(source)));
-  let machine_code = compile_to_machinecode(&bytecode);
-  unsafe { execute_machinecode(&machine_code) };
-  unsafe { execute_bytecode(&bytecode) };
+
+  match execution_model {
+    ExecutionModel::Interpret => unsafe { execute_bytecode(&bytecode) },
+    ExecutionModel::JIT => {
+      let machine_code = compile_to_machinecode(&bytecode);
+      unsafe { execute_machinecode(&machine_code) };
+    }
+  }
 }
