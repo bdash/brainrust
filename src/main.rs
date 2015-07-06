@@ -218,21 +218,401 @@ impl Drop for MemoryMap {
   }
 }
 
+#[derive(Copy, Clone, Debug)]
+enum RegisterNumber {
+  RAX = 0,
+  RCX = 1,
+  RDX = 2,
+  RBX = 3,
+  RSP = 4,
+  RBP = 5,
+  RSI = 6,
+  RDI = 7,
+  R8  = 8,
+  R9  = 9,
+  R10 = 10,
+  R11 = 11,
+  R12 = 12,
+  R13 = 13,
+  R14 = 14,
+  R15 = 15,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum RegisterSize {
+  Int8,
+  Int16,
+  Int32,
+  Int64,
+}
+
+#[allow(dead_code)]
+#[derive(Copy, Clone, Debug)]
+enum Register {
+  RAX,
+  EAX,
+  AX,
+  AH,
+
+  RSP,
+  ESP,
+
+  RBP,
+  EBP,
+
+  RCX,
+  RDX,
+  RBX,
+  RSI,
+  RDI,
+  R8,
+  R9,
+  R10,
+  R11,
+  R12,
+  R13,
+  R14,
+  R15,
+
+  R8B,
+  R9B,
+  R10B,
+  R11B,
+  R12B,
+  R13B,
+  R14B,
+  R15B,
+}
+
+impl Register {
+  fn size(&self) -> RegisterSize {
+    use Register::*;
+    match *self {
+      RAX | RCX | RDX | RBX | RSP | RBP | RSI | RDI => RegisterSize::Int64,
+      R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => RegisterSize::Int64,
+      EAX | ESP | EBP => RegisterSize::Int32,
+      AX => RegisterSize::Int16,
+      AH => RegisterSize::Int8,
+      R8B | R9B | R10B | R11B | R12B | R13B | R14B | R15B => RegisterSize::Int8,
+    }
+  }
+
+  fn is_64_bit(&self) -> bool {
+    self.size() == RegisterSize::Int64
+  }
+
+  fn number(&self) -> u8 {
+    use Register::*;
+    let number = match *self {
+      RAX => RegisterNumber::RAX,
+      RCX => RegisterNumber::RCX,
+      RDX => RegisterNumber::RDX,
+      RBX => RegisterNumber::RBX,
+      RSP => RegisterNumber::RSP,
+      RBP => RegisterNumber::RBP,
+      RSI => RegisterNumber::RSI,
+      RDI => RegisterNumber::RDI,
+      R8  => RegisterNumber::R8,
+      R9  => RegisterNumber::R9,
+      R10 => RegisterNumber::R10,
+      R11 => RegisterNumber::R11,
+      R12 => RegisterNumber::R12,
+      R13 => RegisterNumber::R13,
+      R14 => RegisterNumber::R14,
+      R15 => RegisterNumber::R15,
+
+      EAX => RegisterNumber::RAX,
+      AX  => RegisterNumber::RAX,
+      AH  => RegisterNumber::RAX,
+
+      ESP => RegisterNumber::RSP,
+
+      EBP => RegisterNumber::RBP,
+
+      R8B  => RegisterNumber::R8,
+      R9B  => RegisterNumber::R9,
+      R10B => RegisterNumber::R10,
+      R11B => RegisterNumber::R11,
+      R12B => RegisterNumber::R12,
+      R13B => RegisterNumber::R13,
+      R14B => RegisterNumber::R14,
+      R15B => RegisterNumber::R15,
+    };
+    number as u8
+  }
+
+  fn is_extended_register(&self) -> bool {
+    self.number() >= (RegisterNumber::R8 as u8)
+  }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum MachineInstruction {
+  Ret,
+
+  Push(Register),
+  Pop(Register),
+
+  MovRR(Register, Register),
+//  MovRM(Register, Register, u32),
+//  MovMR(Register, u32, Register),
+
+  IncR(Register),
+  DecR(Register),
+  IncM(RegisterSize, Register, u32),
+  DecM(RegisterSize, Register, u32),
+
+  AddIR(u64, Register),
+  SubIR(u64, Register),
+
+  AddIM(u64, Register, u32),
+  SubIM(u64, Register, u32),
+
+  AddRR(Register, Register),
+  SubRR(Register, Register),
+}
+
+impl MachineInstruction {
+  fn emit(&self, machine_code: &mut Vec<u8>) {
+    use MachineInstruction::*;
+
+    match *self {
+      Ret => {
+        machine_code.push(self.opcode());
+      }
+      Push(register) | Pop(register) => {
+        assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
+        if register.size() == RegisterSize::Int16 {
+          machine_code.push(0x66);
+        }
+        machine_code.push(self.opcode() | register.number());
+      }
+      MovRR(..) | AddRR(..) | SubRR(..) => {
+        let modrm = self.modrm();
+        modrm.emit_rex_if_needed(machine_code);
+        machine_code.extend(&[
+          self.opcode(), modrm.encode()
+        ]);
+        modrm.emit_offset_if_needed(machine_code);
+        self.emit_constant_if_needed(machine_code);
+      }
+      AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) => {
+        let modrm = self.modrm();
+        modrm.emit_rex_if_needed(machine_code);
+        machine_code.extend(&[
+          self.opcode(), modrm.encode() | (self.group1_opcode() << 3)
+        ]);
+        modrm.emit_offset_if_needed(machine_code);
+        self.emit_constant_if_needed(machine_code);
+      }
+      IncR(..) | DecR(..) | IncM(..) | DecM(..) => {
+        let modrm = self.modrm();
+        modrm.emit_rex_if_needed(machine_code);
+        machine_code.extend(&[
+          self.opcode(), modrm.encode() | (self.group3_opcode() << 3),
+        ]);
+        modrm.emit_offset_if_needed(machine_code);
+        self.emit_constant_if_needed(machine_code);
+      }
+    }
+  }
+
+  fn opcode(&self) -> u8 {
+    use MachineInstruction::*;
+
+    match *self {
+      Ret => 0xc3,
+      Push(..) => 0x50,
+      Pop(..) => 0x58,
+      MovRR(..) => 0x89,
+      AddIR(constant, _) | SubIR(constant, _) if constant < 256 => 0x83,
+      AddIM(..) | SubIM(..) => 0x80,
+      AddIR(..) | SubIR(..) => 0x81,
+      IncM(RegisterSize::Int8, _, _) | DecM(RegisterSize::Int8, _, _) => 0xfe,
+      IncR(..) | DecR(..) | IncM(..) | DecM(..) => 0xff,
+      AddRR(..) => 0x1,
+      SubRR(..) => 0x29,
+    }
+  }
+
+  fn group1_opcode(&self) -> u8 {
+    use MachineInstruction::*;
+
+    match *self {
+      AddIR(..) | AddIM(..) => 0x0,
+      SubIR(..) | SubIM(..) => 0x5,
+      _ => unreachable!()
+    }
+  }
+
+  fn group3_opcode(&self) -> u8 {
+    use MachineInstruction::*;
+
+    match *self {
+      IncR(..) | IncM(..) => 0x00,
+      DecR(..) | DecM(..) => 0x01,
+      _ => unreachable!()
+    }
+  }
+
+  fn modrm(&self) -> ModRM {
+    use MachineInstruction::*;
+
+    match *self {
+      MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) => {
+        ModRM::TwoRegisters(source, dest)
+      }
+      AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) => {
+        ModRM::Register(register)
+      }
+      AddIM(_, register, offset) | SubIM(_, register, offset) if offset == 0 => {
+        ModRM::Memory(register.size(), register)
+      }
+      AddIM(_, register, offset) | SubIM(_, register, offset) if offset < 255 => {
+        ModRM::Memory8BitDisplacement(register.size(), register, offset as u8)
+      }
+      IncM(size, register, offset) | DecM(size, register, offset) if offset == 0 => {
+        ModRM::Memory(size, register)
+      }
+      IncM(size, register, offset) | DecM(size, register, offset) if offset < 255 => {
+        ModRM::Memory8BitDisplacement(size, register, offset as u8)
+      }
+      _ => { println!("{:?}", *self); panic!() },
+    }
+  }
+
+  fn emit_constant_if_needed(&self, machine_code: &mut Vec<u8>) {
+    use MachineInstruction::*;
+
+    match *self {
+      AddIR(constant, _) | SubIR(constant, _) | AddIM(constant, _, _) | SubIM(constant, _, _) => {
+        if constant < 256 {
+          machine_code.push(constant as u8);
+        } else {
+          machine_code.extend(&[
+            ((constant >>  0) & 0xff) as u8,
+            ((constant >>  8) & 0xff) as u8,
+            ((constant >> 16) & 0xff) as u8,
+            ((constant >> 24) & 0xff) as u8,
+          ]);
+        }
+      }
+      _ => {}
+    }
+  }
+}
+
+#[allow(dead_code)]
+#[derive(Copy, Clone, Debug)]
+enum ModRM {
+  Memory(RegisterSize, Register),
+  Memory8BitDisplacement(RegisterSize, Register, u8),
+  Memory32BitDisplacement(RegisterSize, Register, u32),
+  Register(Register),
+  TwoRegisters(Register, Register),
+}
+
+impl ModRM {
+  fn encode(&self) -> u8 {
+    match *self {
+      ModRM::Register(register) => 0b11000000 | (register.number() & 0x7),
+      ModRM::TwoRegisters(source, dest) => 0b11000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      ModRM::Memory(_, dest) => 0x0 | (dest.number() & 0x7),
+      ModRM::Memory8BitDisplacement(_, dest, _) => 0b01000000 | (dest.number() & 0x7),
+      ModRM::Memory32BitDisplacement(_, dest, _) => 0b10000000 | (dest.number() & 0x7),
+    }
+  }
+
+  fn emit_offset_if_needed(&self, machine_code: &mut Vec<u8>) {
+    match *self {
+      ModRM::Memory8BitDisplacement(_, _, offset) => machine_code.push(offset),
+      _ => {}
+    }
+  }
+
+  fn needs_rex(&self) -> bool {
+    return self.is_64_bit() || self.has_extended_register()
+  }
+
+  fn emit_rex_if_needed(&self, machine_code: &mut Vec<u8>) {
+    if !self.needs_rex() {
+      return
+    }
+
+    let rex_marker = 0b01000000;
+    match *self {
+      ModRM::TwoRegisters(source, dest) => {
+        assert!(source.is_64_bit() == dest.is_64_bit());
+        let mut rex = rex_marker;
+        rex |= (source.is_64_bit() as u8) << 3;
+        rex |= (source.is_extended_register() as u8) << 2;
+        rex |= dest.is_extended_register() as u8;
+        machine_code.push(rex);
+      }
+      ModRM::Register(..) | ModRM::Memory(..) | ModRM::Memory8BitDisplacement(..) | ModRM::Memory32BitDisplacement(..) => {
+        let mut rex = rex_marker;
+        rex |= (self.is_64_bit() as u8) << 3;
+        rex |= self.has_extended_register() as u8;
+        machine_code.push(rex);
+      }
+    }
+  }
+
+  fn is_64_bit(&self) -> bool {
+    match *self {
+      ModRM::TwoRegisters(source, dest) => {
+        assert!(source.is_64_bit() == dest.is_64_bit());
+        source.is_64_bit()
+      }
+      ModRM::Register(register) => {
+        register.is_64_bit()
+      }
+      ModRM::Memory(size, _) | ModRM::Memory8BitDisplacement(size, _, _) | ModRM::Memory32BitDisplacement(size, _, _) => {
+        size == RegisterSize::Int64
+      }
+    }
+  }
+
+  fn has_extended_register(&self) -> bool {
+    match *self {
+      ModRM::TwoRegisters(source, dest) => {
+        source.is_extended_register() || dest.is_extended_register()
+      }
+      ModRM::Register(register) | ModRM::Memory(_, register) | ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
+        register.is_extended_register()
+      }
+    }
+  }
+
+}
+
+fn lower(instructions: &[MachineInstruction]) -> Vec<u8> {
+  let mut machine_code = Vec::new();
+  for instruction in instructions {
+    instruction.emit(&mut machine_code);
+  }
+  machine_code
+}
+
 #[inline(never)]
 fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
-  let prologue = vec![
-    0x55, // push %rbp
-    0x48, 0x89, 0xe5, // mov %rsp, %rbp
+  use MachineInstruction::*;
 
-    // %rax is the tape head pointer.
-    0x48, 0x89, 0xf8, // mov %rdi, %rax
+  let arguments = &[Register::RDI, Register::RSI];
 
-    // %rbx is the output buffer insertion pointer.
-    0x48, 0x89, 0xf3, // mov %rsi, %rbx
+  let tape_head = Register::RAX;
+  let output_buffer_head = Register::R12;
+  let output_buffer_tail = Register::RBX;
 
-    // %r12 is the output buffer base.
-    0x49, 0x89, 0xf4, // mov %rsi, %r12
-  ];
+  let prologue = lower(&[
+    Push(Register::RBP),
+    MovRR(Register::RSP, Register::RBP),
+
+    MovRR(arguments[0], tape_head),
+    MovRR(arguments[1], output_buffer_head),
+    MovRR(arguments[1], output_buffer_tail),
+  ]);
 
   let mut body = Vec::new();
   let mut loop_start_patch_points = VecMap::new();
@@ -240,52 +620,40 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
 
     match instruction {
       LinkedInstruction::MoveLeft(amount) => {
-        assert!(amount < 255);
-        if amount > 1 {
-          body.extend(vec![
-            0x48, 0x83, 0xe8, amount as u8, // subq $amount, %rax
-          ]);
-        } else {
-          body.extend(vec![
-            0x48, 0xff, 0xc8 // decq %rax
-          ]);
-        }
+        body.extend(lower(&[
+          if amount == 1 {
+            DecR(tape_head)
+          } else {
+            SubIR(amount as u64, tape_head)
+          }
+        ]));
       }
       LinkedInstruction::MoveRight(amount) => {
-        assert!(amount < 255);
-        if amount > 1 {
-          body.extend(vec![
-            0x48, 0x83, 0xc0, amount as u8, // addq $amount, %rax
-          ]);
-        } else {
-          body.extend(vec![
-            0x48, 0xff, 0xc0, // inc %rax
-          ]);
-        }
+        body.extend(lower(&[
+          if amount == 1 {
+            IncR(tape_head)
+          } else {
+            AddIR(amount as u64, tape_head)
+          }
+        ]));
       }
       LinkedInstruction::Add(amount) => {
-        assert!(amount < 255);
-        if amount > 1 {
-          body.extend(vec![
-            0x80, 0x00, amount as u8, // addq $amount, (%rax)
-          ]);
-        } else {
-          body.extend(vec![
-            0x48, 0xff, 0x00, // inc (%rax)
-          ]);
-        }
+        body.extend(lower(&[
+          if amount == 1 {
+            IncM(RegisterSize::Int8, tape_head, 0)
+          } else {
+            AddIM(amount as u64, tape_head, 0)
+          }
+        ]));
       }
       LinkedInstruction::Subtract(amount) => {
-        assert!(amount < 255);
-        if amount > 1 {
-          body.extend(vec![
-            0x80, 0x28, amount as u8, // addq $amount, (%rax)
-          ]);
-        } else {
-          body.extend(vec![
-            0x48, 0xff, 0x08, // sub (%rax)
-          ]);
-        }
+        body.extend(lower(&[
+          if amount == 1 {
+            DecM(RegisterSize::Int8, tape_head, 0)
+          } else {
+            SubIM(amount as u64, tape_head, 0)
+          }
+        ]));
       }
       LinkedInstruction::LoopStart { end: _ } => {
         body.extend(vec![
