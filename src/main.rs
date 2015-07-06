@@ -350,13 +350,15 @@ impl Register {
 #[derive(Debug)]
 enum MachineInstruction {
   Ret,
+  Syscall,
 
   Push(Register),
   Pop(Register),
 
+  MovIR(u64, Register),
   MovRR(Register, Register),
-//  MovRM(Register, Register, u32),
-//  MovMR(Register, u32, Register),
+  MovRM(Register, Register, u32),
+  MovMR(Register, u32, Register),
 
   IncR(Register),
   DecR(Register),
@@ -371,6 +373,7 @@ enum MachineInstruction {
 
   AddRR(Register, Register),
   SubRR(Register, Register),
+  XorRR(Register, Register),
 }
 
 impl MachineInstruction {
@@ -378,21 +381,22 @@ impl MachineInstruction {
     use MachineInstruction::*;
 
     match *self {
-      Ret => {
-        machine_code.push(self.opcode());
+      Ret | Syscall => {
+        self.emit_opcode(machine_code);
       }
       Push(register) | Pop(register) => {
         assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
         if register.size() == RegisterSize::Int16 {
           machine_code.push(0x66);
         }
-        machine_code.push(self.opcode() | register.number());
+        self.emit_opcode(machine_code);
       }
-      MovRR(..) | AddRR(..) | SubRR(..) => {
+      MovIR(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) => {
         let modrm = self.modrm();
         modrm.emit_rex_if_needed(machine_code);
+        self.emit_opcode(machine_code);
         machine_code.extend(&[
-          self.opcode(), modrm.encode()
+          modrm.encode()
         ]);
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
@@ -400,8 +404,9 @@ impl MachineInstruction {
       AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) => {
         let modrm = self.modrm();
         modrm.emit_rex_if_needed(machine_code);
+        self.emit_opcode(machine_code);
         machine_code.extend(&[
-          self.opcode(), modrm.encode() | (self.group1_opcode() << 3)
+          modrm.encode() | (self.group1_opcode() << 3)
         ]);
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
@@ -409,8 +414,9 @@ impl MachineInstruction {
       IncR(..) | DecR(..) | IncM(..) | DecM(..) => {
         let modrm = self.modrm();
         modrm.emit_rex_if_needed(machine_code);
+        self.emit_opcode(machine_code);
         machine_code.extend(&[
-          self.opcode(), modrm.encode() | (self.group3_opcode() << 3),
+          modrm.encode() | (self.group3_opcode() << 3),
         ]);
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
@@ -418,14 +424,17 @@ impl MachineInstruction {
     }
   }
 
-  fn opcode(&self) -> u8 {
+  fn emit_opcode(&self, machine_code: &mut Vec<u8>) {
     use MachineInstruction::*;
 
-    match *self {
+    let first_byte = match *self {
       Ret => 0xc3,
-      Push(..) => 0x50,
-      Pop(..) => 0x58,
-      MovRR(..) => 0x89,
+      Syscall => 0xf,
+      Push(register) => 0x50 | register.number(),
+      Pop(register) => 0x58 | register.number(),
+      MovIR(..) => 0xc7,
+      MovRR(..) | MovRM(..) => 0x89,
+      MovMR(..) => 0x8b,
       AddIR(constant, _) | SubIR(constant, _) if constant < 256 => 0x83,
       AddIM(..) | SubIM(..) => 0x80,
       AddIR(..) | SubIR(..) => 0x81,
@@ -433,7 +442,16 @@ impl MachineInstruction {
       IncR(..) | DecR(..) | IncM(..) | DecM(..) => 0xff,
       AddRR(..) => 0x1,
       SubRR(..) => 0x29,
-    }
+      XorRR(..) => 0x31,
+    };
+    machine_code.push(first_byte);
+
+    match *self {
+      Syscall => {
+        machine_code.push(0x05);
+      }
+      _ => {}
+    };
   }
 
   fn group1_opcode(&self) -> u8 {
@@ -460,10 +478,14 @@ impl MachineInstruction {
     use MachineInstruction::*;
 
     match *self {
-      MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) => {
+      MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) | XorRR(source, dest) => {
         ModRM::TwoRegisters(source, dest)
       }
-      AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) => {
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if offset == 0 => {
+        // MovRM and MovMR encode the memory register second.
+        ModRM::MemoryTwoRegisters(reg1, reg2)
+      }
+      MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) => {
         ModRM::Register(register)
       }
       AddIM(_, register, offset) | SubIM(_, register, offset) if offset == 0 => {
@@ -488,18 +510,30 @@ impl MachineInstruction {
     match *self {
       AddIR(constant, _) | SubIR(constant, _) | AddIM(constant, _, _) | SubIM(constant, _, _) => {
         if constant < 256 {
-          machine_code.push(constant as u8);
+          self.emit_8_bit_constant(machine_code, constant);
         } else {
-          machine_code.extend(&[
-            ((constant >>  0) & 0xff) as u8,
-            ((constant >>  8) & 0xff) as u8,
-            ((constant >> 16) & 0xff) as u8,
-            ((constant >> 24) & 0xff) as u8,
-          ]);
+          self.emit_64_bit_constant(machine_code, constant);
         }
+      }
+      MovIR(constant, _) => {
+        self.emit_64_bit_constant(machine_code, constant);
       }
       _ => {}
     }
+  }
+
+  fn emit_8_bit_constant(&self, machine_code: &mut Vec<u8>, constant: u64) {
+    assert!(constant < 255);
+    machine_code.push(constant as u8);
+  }
+
+  fn emit_64_bit_constant(&self, machine_code: &mut Vec<u8>, constant: u64) {
+    machine_code.extend(&[
+      ((constant >>  0) & 0xff) as u8,
+      ((constant >>  8) & 0xff) as u8,
+      ((constant >> 16) & 0xff) as u8,
+      ((constant >> 24) & 0xff) as u8,
+    ]);
   }
 }
 
@@ -507,6 +541,8 @@ impl MachineInstruction {
 #[derive(Copy, Clone, Debug)]
 enum ModRM {
   Memory(RegisterSize, Register),
+  MemoryTwoRegisters(Register, Register),
+  // FIXME: Two registers with displacement?
   Memory8BitDisplacement(RegisterSize, Register, u8),
   Memory32BitDisplacement(RegisterSize, Register, u32),
   Register(Register),
@@ -519,6 +555,7 @@ impl ModRM {
       ModRM::Register(register) => 0b11000000 | (register.number() & 0x7),
       ModRM::TwoRegisters(source, dest) => 0b11000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
       ModRM::Memory(_, dest) => 0x0 | (dest.number() & 0x7),
+      ModRM::MemoryTwoRegisters(source, dest) => 0x0 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
       ModRM::Memory8BitDisplacement(_, dest, _) => 0b01000000 | (dest.number() & 0x7),
       ModRM::Memory32BitDisplacement(_, dest, _) => 0b10000000 | (dest.number() & 0x7),
     }
@@ -542,8 +579,7 @@ impl ModRM {
 
     let rex_marker = 0b01000000;
     match *self {
-      ModRM::TwoRegisters(source, dest) => {
-        assert!(source.is_64_bit() == dest.is_64_bit());
+      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) => {
         let mut rex = rex_marker;
         rex |= (source.is_64_bit() as u8) << 3;
         rex |= (source.is_extended_register() as u8) << 2;
@@ -565,6 +601,9 @@ impl ModRM {
         assert!(source.is_64_bit() == dest.is_64_bit());
         source.is_64_bit()
       }
+      ModRM::MemoryTwoRegisters(source, dest) => {
+        source.is_64_bit() || dest.is_64_bit()
+      }
       ModRM::Register(register) => {
         register.is_64_bit()
       }
@@ -576,7 +615,7 @@ impl ModRM {
 
   fn has_extended_register(&self) -> bool {
     match *self {
-      ModRM::TwoRegisters(source, dest) => {
+      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) => {
         source.is_extended_register() || dest.is_extended_register()
       }
       ModRM::Register(register) | ModRM::Memory(_, register) | ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
@@ -599,11 +638,12 @@ fn lower(instructions: &[MachineInstruction]) -> Vec<u8> {
 fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
   use MachineInstruction::*;
 
-  let arguments = &[Register::RDI, Register::RSI];
+  let arguments = &[Register::RDI, Register::RSI, Register::RDX];
 
   let tape_head = Register::RAX;
   let output_buffer_head = Register::R12;
   let output_buffer_tail = Register::RBX;
+  let system_call_number = Register::RAX;
 
   let prologue = lower(&[
     Push(Register::RBP),
@@ -682,56 +722,66 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
         body[loop_start_patch_point + 3] = ((distance >> 24) & 0xff) as u8;
       }
       LinkedInstruction::Output => {
-        body.extend(vec![
+        let scratch_byte = Register::R13B;
+        body.extend(lower(&[
           // Append byte to output buffer.
-          0x44, 0x8a, 0x28, // movb (%rax), %r13b
-          0x44, 0x88, 0x2b, // movb %r13b, (%rbx)
-          0x48, 0xff, 0xc3, // inc %rbx
+          MovMR(tape_head, 0, scratch_byte),
+          MovRM(scratch_byte, output_buffer_tail, 0),
+          IncR(output_buffer_tail),
 
+        ]));
+
+        body.extend(vec![
           // Don't call write until we see a newline character.
           0x41, 0x80, 0xfd, 0x0a, // cmp $10, %r13b
           0x75, 0x1e, // jneq +30
-
-          0x50, // push %rax
-
-          // Compute the number of bytes to write.
-          0x48, 0x89, 0xda, // movq %rbx, %rdx
-          0x4c, 0x29, 0xe2, // subq %r12, %rdx
-
-          // Write bytes from %r12 to stdout.
-          0x4c, 0x89, 0xe6, // mov %r12, %rsi
-          0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdi
-          0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x02, // mov $0x2000004, %rax
-          0x0f, 0x05, // syscall
-
-          // Reset the output buffer tail to the start.
-          0x4c, 0x89, 0xe3, // mov %r12, %rbx
-
-          0x58, // pop %rax
         ]);
+
+        body.extend(lower(&[
+          Push(tape_head),
+
+          // Compute the number of bytes written
+          MovRR(output_buffer_tail, arguments[2]),
+          SubRR(output_buffer_head, arguments[2]),
+
+          // Write output buffer to stdout
+          MovRR(output_buffer_head, arguments[1]),
+          MovIR(1, arguments[0]),
+          MovIR(0x2000004, system_call_number),
+          Syscall,
+
+          // // Reset the output buffer tail to the start.
+          MovRR(output_buffer_head, output_buffer_tail),
+
+          Pop(Register::RAX),
+        ]));
       }
       _ => { println!("{:?}", instruction); panic!() }
     }
   }
 
-  let epilogue = vec![
-    // Compute the number of bytes to write.
-    0x48, 0x89, 0xda, // movq %rbx, %rdx
-    0x4c, 0x29, 0xe2, // subq %r12, %rdx
+  let mut epilogue = lower(&[
+    // Compute the number of bytes written
+    MovRR(output_buffer_tail, arguments[2]),
+    SubRR(output_buffer_head, arguments[2]),
+  ]);
 
+  epilogue.extend(vec![
     // Don't call write if we have nothing in the output buffer.
     0x74, 0x13, // jeq +19
+  ]);
 
-    // Write bytes from %r12 to stdout.
-    0x4c, 0x89, 0xe6, // mov %r12, %rsi
-    0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov $1, %rdi
-    0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x02, // mov $0x2000004, %rax
-    0x0f, 0x05, // syscall
+  epilogue.extend(lower(&[
+    // Write output buffer to stdout
+    MovRR(output_buffer_head, arguments[1]),
+    MovIR(1, arguments[0]),
+    MovIR(0x2000004, system_call_number),
+    Syscall,
 
-    0x48, 0x31, 0xc0, // xor %rax, %rax (jump target)
-    0x5d, // pop %rbp
-    0xc3, // ret
-  ];
+    XorRR(Register::RAX, Register::RAX),
+    Pop(Register::RBP),
+    Ret,
+  ]));
 
   prologue.into_iter().chain(body).chain(epilogue).collect::<Vec<u8>>()
 }
