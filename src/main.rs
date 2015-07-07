@@ -4,6 +4,7 @@ extern crate libc;
 extern crate unreachable;
 extern crate vec_map;
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Result, Read, Write, stdout};
 use std::mem;
@@ -36,18 +37,33 @@ enum Instruction {
   MoveRight(usize),
   Add(u8),
   Subtract(u8),
+  AddAtOffset(u8, i32),
+  SubtractAtOffset(u8, i32),
+  SetAtOffset(u8, i32),
   Output,
   Input,
   LoopStart { end: Option<usize> },
   LoopEnd { start: Option<usize> },
 }
 
+impl Instruction {
+  fn is_basic_block_edge(&self) -> bool {
+    use Instruction::*;
+
+    match *self {
+      Output | Input | LoopStart { .. } | LoopEnd { .. } => true,
+      _ => false
+    }
+  }
+}
+
 #[derive(Debug, PartialEq, Copy, Clone)]
 enum LinkedInstruction {
   MoveLeft(usize),
   MoveRight(usize),
-  Add(u8),
-  Subtract(u8),
+  Add(u8, i32),
+  Subtract(u8, i32),
+  SetAtOffset(u8, i32),
   Output,
   Input,
   LoopStart { end: usize },
@@ -75,13 +91,16 @@ impl LinkedInstruction {
     match *instruction {
       Instruction::MoveLeft(amount) => LinkedInstruction::MoveLeft(amount),
       Instruction::MoveRight(amount) => LinkedInstruction::MoveRight(amount),
-      Instruction::Add(amount) => LinkedInstruction::Add(amount),
-      Instruction::Subtract(amount) => LinkedInstruction::Subtract(amount),
+      Instruction::Add(amount) => LinkedInstruction::Add(amount, 0),
+      Instruction::Subtract(amount) => LinkedInstruction::Subtract(amount, 0),
+      Instruction::AddAtOffset(amount, offset) => LinkedInstruction::Add(amount, offset),
+      Instruction::SubtractAtOffset(amount, offset) => LinkedInstruction::Subtract(amount, offset),
+      Instruction::SetAtOffset(value, offset) => LinkedInstruction::SetAtOffset(value, offset),
       Instruction::Output => LinkedInstruction::Output,
       Instruction::Input => LinkedInstruction::Input,
       Instruction::LoopStart { end: Some(end) } => LinkedInstruction::LoopStart { end: end },
       Instruction::LoopEnd { start: Some(start) } => LinkedInstruction::LoopEnd { start: start},
-      _ => panic!(),
+      _ => panic!()
     }
   }
 }
@@ -91,8 +110,111 @@ fn compile_to_bytecode(source: Vec<u8>) -> Vec<Instruction> {
   source.into_iter().filter_map(Instruction::from_token).collect()
 }
 
-#[inline(never)]
-fn optimize_bytecode(instructions: Vec<Instruction>) -> Vec<Instruction> {
+fn simplify_basic_blocks(instructions: &Vec<Instruction>) -> Vec<Instruction> {
+  use Instruction::*;
+
+  instructions.iter().group_by(|&instruction| instruction.is_basic_block_edge()).flat_map(|(key, group)| {
+    match key {
+      false => {
+        #[derive(Copy, Clone, Debug)]
+        enum Modification {
+          Add(i8),
+          Subtract(i8),
+          Set(i8),
+        }
+
+        impl Modification {
+          fn update(&mut self, other: Modification) {
+            *self = match (*self, other) {
+              (_, Modification::Set(_)) => other,
+              (Modification::Set(base), Modification::Add(amount)) => Modification::Set(base + amount),
+              (Modification::Set(base), Modification::Subtract(amount)) => Modification::Set(base - amount),
+              (Modification::Add(a), Modification::Add(b)) => Modification::Add(a + b),
+              (Modification::Subtract(a), Modification::Subtract(b)) => Modification::Subtract(a + b),
+              (Modification::Add(a), Modification::Subtract(b)) => {
+                match (a - b).signum() {
+                  1 | 0 => Modification::Add(a - b),
+                  -1 => Modification::Subtract(b - a),
+                  _ => unreachable!(),
+                }
+              }
+              (Modification::Subtract(a), Modification::Add(b)) => {
+                match (b - a).signum() {
+                  1 | 0 => Modification::Add(a - b),
+                  -1 => Modification::Subtract(b - a),
+                  _ => unreachable!(),
+                }
+              }
+            }
+          }
+        }
+
+        let mut modifications: HashMap<i32, Modification> = HashMap::new();
+        let mut index = 0i32;
+
+        for instruction in &group {
+          match **instruction {
+            MoveLeft(amount) => {
+              index -= amount as i32;
+            }
+            MoveRight(amount) => {
+              index += amount as i32;
+            }
+            Add(amount) => {
+              let value = modifications.entry(index).or_insert(Modification::Add(0));
+              value.update(Modification::Add(amount as i8));
+            }
+            Subtract(amount) => {
+              let value = modifications.entry(index).or_insert(Modification::Add(0));
+              value.update(Modification::Subtract(amount as i8));
+            }
+            AddAtOffset(amount, offset) => {
+              let value = modifications.entry(index + offset).or_insert(Modification::Add(0));
+              value.update(Modification::Add(amount as i8));
+            }
+            SubtractAtOffset(amount, offset) => {
+              let value = modifications.entry(index + offset).or_insert(Modification::Add(0));
+              value.update(Modification::Subtract(amount as i8));
+            }
+            SetAtOffset(amount, offset) => {
+              let value = modifications.entry(index + offset).or_insert(Modification::Set(0));
+              value.update(Modification::Set(amount as i8));
+            }
+            Output | Input | LoopStart { .. } | LoopEnd { .. } => unreachable!()
+          }
+        }
+
+        let mut modified_offsets = modifications.keys().collect::<Vec<&i32>>();
+        modified_offsets.sort();
+        
+        modified_offsets.iter().flat_map(|offset| {
+          let value = modifications[*offset];
+          match (offset.signum(), value) {
+            (0, Modification::Subtract(value)) => Some(Subtract(value as u8)),
+            (0, Modification::Add(value)) => Some(Add(value as u8)),
+            (0, Modification::Set(value)) => Some(SetAtOffset(value as u8, 0)),
+            (_, Modification::Subtract(value)) => Some(SubtractAtOffset(value as u8, **offset)),
+            (_, Modification::Add(value)) => Some(AddAtOffset(value as u8, **offset)),
+            (_, Modification::Set(value)) => Some(SetAtOffset(value as u8, **offset))
+//            (_, ) => None
+          }
+        }).chain(
+          match index.signum() {
+             1 => Some(MoveRight(index as usize)),
+            -1 => Some(MoveLeft(index.abs() as usize)),
+            _ => {
+//              println!("Loop did not advance the index: {:?}", group);
+              None
+            }
+          }
+        ).collect::<Vec<Instruction>>()
+      }
+      true => group.iter().map(|&instruction| *instruction).collect()
+    }
+  }).collect()
+}
+
+fn old_optimize_bytecode(instructions: &Vec<Instruction>) -> Vec<Instruction> {
   instructions.iter().group_by(|&instruction| instruction).flat_map(|(&key, group)| {
     match key {
       Instruction::MoveLeft(_) => vec![Instruction::MoveLeft(group.len())],
@@ -110,6 +232,43 @@ fn optimize_bytecode(instructions: Vec<Instruction>) -> Vec<Instruction> {
       _ => group.iter().map(|&instruction| *instruction).collect()
     }
   }).collect()
+}
+
+#[inline(never)]
+fn optimize_bytecode(mut instructions: Vec<Instruction>) -> Vec<Instruction> {
+//  println!("Before:");
+//  println!("{:?}", instructions);
+
+  let mut i = 0;
+  while i < instructions.len() - 3 {
+    let a = instructions[i];
+    let b = instructions[i + 1];
+    let c = instructions[i + 2];
+    match (a, b, c) {
+      (Instruction::LoopStart { end: None }, Instruction::Subtract(1), Instruction::LoopEnd { start: None }) => {
+//        println!("Found a subtract loop at {:?}", i);
+//        println!("{:?}", (a, b, c));
+        instructions[i] = Instruction::SetAtOffset(0, 0);
+        instructions.remove(i + 1);
+        instructions.remove(i + 1);
+      }
+      _ => {}
+    }
+
+    i += 1;
+  }
+
+//  println!("Before:");
+//  println!("{:?}", instructions);
+  let result = simplify_basic_blocks(&instructions);
+//  println!("After:");
+//  println!("{:?}", result);
+//  println!("Old");
+//  let old_result = old_optimize_bytecode(&instructions);
+//  println!("{:?}", old_result);
+
+  result
+// old_result
 }
 
 #[inline(never)]
@@ -158,12 +317,12 @@ unsafe fn execute_bytecode(instructions: &Vec<LinkedInstruction>) {
       LinkedInstruction::MoveLeft(amount) => tape_head -= amount,
       LinkedInstruction::MoveRight(amount) => tape_head += amount,
 
-      LinkedInstruction::Add(amount) => {
-        let value = tape.get_unchecked_mut(tape_head);
+      LinkedInstruction::Add(amount, offset) => {
+        let value = tape.get_unchecked_mut(tape_head + offset as usize);
         *value = value.wrapping_add(amount);
       }
-      LinkedInstruction::Subtract(amount) => {
-        let value = tape.get_unchecked_mut(tape_head);
+      LinkedInstruction::Subtract(amount, offset) => {
+        let value = tape.get_unchecked_mut(tape_head + offset as usize);
         *value = value.wrapping_sub(amount);
       }
 
@@ -416,27 +575,28 @@ enum MachineInstruction {
   Pop(Register),
 
   MovIR(u64, Register),
+  MovIM(RegisterSize, u32, Register, i32),
   MovRR(Register, Register),
-  MovRM(Register, Register, u32),
-  MovMR(Register, u32, Register),
+  MovRM(Register, Register, i32),
+  MovMR(Register, i32, Register),
 
   IncR(Register),
   DecR(Register),
-  IncM(RegisterSize, Register, u32),
-  DecM(RegisterSize, Register, u32),
+  IncM(RegisterSize, Register, i32),
+  DecM(RegisterSize, Register, i32),
 
   AddIR(u32, Register),
   SubIR(u32, Register),
 
-  AddIM(RegisterSize, u32, Register, u32),
-  SubIM(RegisterSize, u32, Register, u32),
+  AddIM(RegisterSize, u32, Register, i32),
+  SubIM(RegisterSize, u32, Register, i32),
 
   AddRR(Register, Register),
   SubRR(Register, Register),
   XorRR(Register, Register),
 
   CmpIR(u32, Register),
-  CmpIM(RegisterSize, u32, Register, u32),
+  CmpIM(RegisterSize, u32, Register, i32),
 
   Jmp(i32),
   Jz(i32),
@@ -457,7 +617,7 @@ impl MachineInstruction {
         self.emit_opcode(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
-      MovIR(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) |
+      MovIR(..) | MovIM(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) |
       AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) |
       IncR(..) | DecR(..) | IncM(..) | DecM(..)  => {
         let modrm = self.modrm();
@@ -484,6 +644,21 @@ impl MachineInstruction {
       }
       Push(register) | Pop(register) => {
         assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
+      }
+      MovIR(constant, register) => {
+        match register.size() {
+          RegisterSize::Int8 => assert!(constant <= std::u8::MAX as u64),
+          RegisterSize::Int16 => assert!(constant <= std::u16::MAX as u64),
+          RegisterSize::Int32 => assert!(constant <= std::u32::MAX as u64),
+          RegisterSize::Int64 => {}
+        }
+      }
+      MovIM(size, constant, _, _) => {
+        match size {
+          RegisterSize::Int8 => assert!(constant <= std::u8::MAX as u32),
+          RegisterSize::Int16 => assert!(constant <= std::u16::MAX as u32),
+          _ => {}
+        }
       }
       _ => {}
     }
@@ -521,7 +696,8 @@ impl MachineInstruction {
       MovMR(..) => 0x8b,
 
       MovIR(..) if !self.mov_ir_needs_modrm_byte() => 0xb8,
-      MovIR(..) => 0xc7,
+      MovIM(RegisterSize::Int8, _, _, _) => 0xc6,
+      MovIR(..) | MovIM(..) => 0xc7,
 
       // incb / decb
       IncM(RegisterSize::Int8, _, _) | DecM(RegisterSize::Int8, _, _) => 0xfe,
@@ -598,9 +774,9 @@ impl MachineInstruction {
         // MovRM and MovMR encode the memory register second.
         ModRM::MemoryTwoRegisters(reg1, reg2)
       }
-      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if offset < 255 => {
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if offset >= -128 && offset < 128 => {
         // MovRM and MovMR encode the memory register second.
-        ModRM::MemoryTwoRegisters8BitDisplacement(reg1, reg2, offset as u8)
+        ModRM::MemoryTwoRegisters8BitDisplacement(reg1, reg2, offset as i8)
       }
       MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) => {
         // MovRM and MovMR encode the memory register second.
@@ -609,20 +785,24 @@ impl MachineInstruction {
       MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) | CmpIR(_, register) => {
         ModRM::Register(register)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) |
+      SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset < 255 => {
-        ModRM::Memory8BitDisplacement(size, register, offset as u8)
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) |
+      SubIM(size, _, register, offset) | CmpIM(size, _, register, offset)
+        if offset >= -128 && offset < 128 => {
+        ModRM::Memory8BitDisplacement(size, register, offset as i8)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) |
+      SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
       }
       IncM(size, register, offset) | DecM(size, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
       }
-      IncM(size, register, offset) | DecM(size, register, offset) if offset < 255 => {
-        ModRM::Memory8BitDisplacement(size, register, offset as u8)
+      IncM(size, register, offset) | DecM(size, register, offset) if offset >= -128 && offset < 128 => {
+        ModRM::Memory8BitDisplacement(size, register, offset as i8)
       }
       IncM(size, register, offset) | DecM(size, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
@@ -636,40 +816,48 @@ impl MachineInstruction {
     use MachineInstruction::*;
 
     match *self {
-      AddIM(RegisterSize::Int8, constant, _, _) | SubIM(RegisterSize::Int8, constant, _, _) | CmpIM(RegisterSize::Int8, constant, _, _) => {
-        machine_code.emit_8_bit_constant(constant);
+      MovIM(RegisterSize::Int64, constant, _, _) | MovIM(RegisterSize::Int32, constant, _, _) => {
+        machine_code.emit_32_bit_constant(constant as i32);
       }
-      AddIR(constant, _) | SubIR(constant, _) | CmpIR(constant, _) | AddIM(_, constant, _, _) | SubIM(_, constant, _, _) | CmpIM(_, constant, _, _) => {
-        if constant < 256 {
-          machine_code.emit_8_bit_constant(constant);
+      MovIM(RegisterSize::Int16, constant, _, _) => {
+        machine_code.emit_16_bit_constant(constant as i32);
+      }
+      MovIM(RegisterSize::Int8, constant, _, _) | AddIM(RegisterSize::Int8, constant, _, _) |
+      SubIM(RegisterSize::Int8, constant, _, _) | CmpIM(RegisterSize::Int8, constant, _, _) => {
+        machine_code.emit_8_bit_constant(constant as i32);
+      }
+      AddIR(constant, _) | SubIR(constant, _) | CmpIR(constant, _) | AddIM(_, constant, _, _) |
+      SubIM(_, constant, _, _) | CmpIM(_, constant, _, _) => {
+        if constant as i32 >= std::i8::MIN as i32 && constant as i32 <= std::i8::MAX as i32 {
+          machine_code.emit_8_bit_constant(constant as i32);
         } else {
-          machine_code.emit_32_bit_constant(constant);
+          machine_code.emit_32_bit_constant(constant as i32);
         }
       }
       Jmp(constant) | Jz(constant) | Jnz(constant) => {
-        if constant >= -128 && constant < 128 {
-          machine_code.emit_8_bit_constant(constant as u8 as u32);
+        if constant >= std::i8::MIN as i32 && constant <= std::i8::MAX as i32 {
+          machine_code.emit_8_bit_constant(constant as i8 as i32);
         } else {
-          machine_code.emit_32_bit_constant(constant as u32);
+          machine_code.emit_32_bit_constant(constant as i32);
         }
       },
       Call(constant) => {
-        machine_code.emit_32_bit_constant(constant as u32);
+        machine_code.emit_32_bit_constant(constant as i32);
       }
       MovIR(constant, _) if constant > std::u32::MAX as u64 => {
         machine_code.emit_64_bit_constant(constant);
       }
       MovIR(constant, register) if register.size() == RegisterSize::Int32 => {
-        machine_code.emit_32_bit_constant(constant as u32);
+        machine_code.emit_32_bit_constant(constant as i32);
       }
       MovIR(constant, register) if register.size() == RegisterSize::Int16 => {
-        machine_code.emit_16_bit_constant(constant as u32);
+        machine_code.emit_16_bit_constant(constant as i32);
       }
       MovIR(constant, register) if register.size() == RegisterSize::Int8 => {
-        machine_code.emit_8_bit_constant(constant as u32);
+        machine_code.emit_8_bit_constant(constant as i32);
       }
       MovIR(constant, _) => {
-        machine_code.emit_32_bit_constant(constant as u32);
+        machine_code.emit_32_bit_constant(constant as i32);
       }
       _ => {}
     }
@@ -689,20 +877,22 @@ impl MachineCode {
     self.buffer.push(byte);
   }
 
-  fn emit_8_bit_constant(&mut self, constant: u32) {
-    assert!(constant < std::u8::MAX as u32);
+  fn emit_8_bit_constant(&mut self, constant: i32) {
+    assert!(constant as i32 <= std::i8::MAX as i32);
+    assert!(constant as i32 >= std::i8::MIN as i32);
     self.buffer.push(constant as u8);
   }
 
-  fn emit_16_bit_constant(&mut self, constant: u32) {
-    assert!(constant < std::u8::MAX as u32);
+  fn emit_16_bit_constant(&mut self, constant: i32) {
+    assert!(constant as i32 <= std::i16::MAX as i32);
+    assert!(constant as i32 >= std::i16::MIN as i32);
     self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
     ]);
   }
 
-  fn emit_32_bit_constant(&mut self, constant: u32) {
+  fn emit_32_bit_constant(&mut self, constant: i32) {
     self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
@@ -731,10 +921,10 @@ enum ModRM {
   None,
   Memory(RegisterSize, Register),
   MemoryTwoRegisters(Register, Register),
-  MemoryTwoRegisters8BitDisplacement(Register, Register, u8),
-  MemoryTwoRegisters32BitDisplacement(Register, Register, u32),
-  Memory8BitDisplacement(RegisterSize, Register, u8),
-  Memory32BitDisplacement(RegisterSize, Register, u32),
+  MemoryTwoRegisters8BitDisplacement(Register, Register, i8),
+  MemoryTwoRegisters32BitDisplacement(Register, Register, i32),
+  Memory8BitDisplacement(RegisterSize, Register, i8),
+  Memory32BitDisplacement(RegisterSize, Register, i32),
   Register(Register),
   Register64(Register),
   TwoRegisters(Register, Register),
@@ -774,10 +964,10 @@ impl ModRM {
 
     match *self {
       Memory8BitDisplacement(_, _, offset) | MemoryTwoRegisters8BitDisplacement(_, _, offset) => {
-        machine_code.emit_8_bit_constant(offset as u32)
+        machine_code.emit_8_bit_constant(offset as i32)
       }
       Memory32BitDisplacement(_, _, offset) | MemoryTwoRegisters32BitDisplacement(_, _, offset) => {
-        machine_code.emit_32_bit_constant(offset)
+        machine_code.emit_32_bit_constant(offset as i32)
       }
       _ => {}
     }
@@ -1011,6 +1201,16 @@ fn show_representation(instructions: &[MachineInstruction]) {
     // FIXME: Is this only testing that at least one of the statements panics?
     lower(& [ MovIR(0x123456789abcde, EAX) ]);
     lower(& [ MovIR(0x1234, AX) ]);
+  }
+
+  #[test]
+  fn test_mov_im() {
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int64, 1, RAX, 0) ]), vec![ 0b1001000, 0xc7, 0b00000000, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int32, 1, RAX, 0) ]), vec![ 0xc7, 0b00000000, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int16, 1, RAX, 0) ]), vec![ 0x66, 0xc7, 0b00000000, 0x01, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int8,  1, RAX, 0) ]), vec![ 0xc6, 0b00000000, 0x01 ]);
+
+    // FIXME: More tests.
   }
 
   #[test]
@@ -1547,22 +1747,27 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           }
         ]));
       }
-      LinkedInstruction::Add(amount) => {
+      LinkedInstruction::Add(amount, offset) => {
         body.extend(lower(&[
           if amount == 1 {
-            IncM(RegisterSize::Int8, tape_head, 0)
+            IncM(RegisterSize::Int8, tape_head, offset)
           } else {
-            AddIM(RegisterSize::Int8, amount as u32, tape_head, 0)
+            AddIM(RegisterSize::Int8, amount as u32, tape_head, offset)
           }
         ]));
       }
-      LinkedInstruction::Subtract(amount) => {
+      LinkedInstruction::Subtract(amount, offset) => {
         body.extend(lower(&[
           if amount == 1 {
-            DecM(RegisterSize::Int8, tape_head, 0)
+            DecM(RegisterSize::Int8, tape_head, offset)
           } else {
-            SubIM(RegisterSize::Int8, amount as u32, tape_head, 0)
+            SubIM(RegisterSize::Int8, amount as u32, tape_head, offset)
           }
+        ]));
+      }
+      LinkedInstruction::SetAtOffset(value, offset) => {
+        body.extend(lower(&[
+          MovIM(RegisterSize::Int8, value as u32, tape_head, offset)
         ]));
       }
       LinkedInstruction::LoopStart { end: _ } => {
@@ -1626,6 +1831,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
   prologue.into_iter().chain(body).chain(epilogue).collect::<Vec<u8>>()
 }
 
+#[inline(never)]
 unsafe fn execute_machinecode(machine_code: &Vec<u8>) {
   write_to_file("out.dat", &machine_code).unwrap();
 
