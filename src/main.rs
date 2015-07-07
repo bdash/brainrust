@@ -450,50 +450,24 @@ impl MachineInstruction {
     self.validate();
 
     match *self {
-      Ret | Syscall => {
-        self.emit_opcode(machine_code);
-      }
-      Push(register) | Pop(register) => {
-        assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
-        if register.size() == RegisterSize::Int16 {
-          machine_code.push(0x66);
-        }
-        if register.is_extended_register() {
-          machine_code.push(0b01000001);
-        }
-        self.emit_opcode(machine_code);
-      }
-      MovIR(_, _) if self.mov_ir_uses_b8() => {
+      MovIR(_, _) if !self.mov_ir_needs_modrm_byte() => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
-      MovIR(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) => {
+      MovIR(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) |
+      AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) |
+      IncR(..) | DecR(..) | IncM(..) | DecM(..)  => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
-        machine_code.push(modrm.encode());
-        modrm.emit_offset_if_needed(machine_code);
+        modrm.emit(machine_code, self.group_opcode());
         self.emit_constant_if_needed(machine_code);
       }
-      AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) => {
+      Push(..) | Pop(..) | Ret | Syscall | Jmp(..) | Jz(..) | Jnz(..) => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
-        self.emit_opcode(machine_code);
-        machine_code.push(modrm.encode() | (self.group1_opcode() << 3));
-        modrm.emit_offset_if_needed(machine_code);
-        self.emit_constant_if_needed(machine_code);
-      }
-      IncR(..) | DecR(..) | IncM(..) | DecM(..) => {
-        let modrm = self.modrm();
-        modrm.emit_prefixes_if_needed(machine_code);
-        self.emit_opcode(machine_code);
-        machine_code.push(modrm.encode() | (self.group3_opcode() << 3));
-        modrm.emit_offset_if_needed(machine_code);
-        self.emit_constant_if_needed(machine_code);
-      }
-      Jmp(..) | Jz(..) | Jnz(..) => {
         self.emit_opcode(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
@@ -504,8 +478,11 @@ impl MachineInstruction {
     use MachineInstruction::*;
 
     match *self {
-      MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) => {
+      MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) | XorRR(source, dest) => {
         assert!(source.size() == dest.size());
+      }
+      Push(register) | Pop(register) => {
+        assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
       }
       _ => {}
     }
@@ -514,87 +491,94 @@ impl MachineInstruction {
   fn emit_opcode(&self, machine_code: &mut MachineCode) {
     use MachineInstruction::*;
 
-    let first_byte = match *self {
+    const TWO_BYTE_ESCAPE: u8 = 0x0f;
+
+    let opcode = match *self {
       Ret => 0xc3,
-      Syscall => 0x0f,
+      Syscall => TWO_BYTE_ESCAPE,
       Push(register) => 0x50 | (register.number() & 0x7),
       Pop(register) => 0x58 | (register.number() & 0x7),
-      MovIR(..) if self.mov_ir_uses_b8() => 0xb8,
-      MovIR(..) => 0xc7,
-      MovRR(source, _) | MovRM(source, _, _) if source.size() == RegisterSize::Int8 => 0x88,
-      MovRR(..) | MovRM(..) => 0x89,
-      MovMR(_, _, dest) if dest.size() == RegisterSize::Int8 => 0x8a,
-      MovMR(..) => 0x8b,
-      AddIR(constant, _) | SubIR(constant, _) if constant < 256 => 0x83,
-      AddIR(..) | SubIR(..) => 0x81,
-      AddIM(RegisterSize::Int8, _, _, _) | SubIM(RegisterSize::Int8, _, _, _) => 0x80,
-      AddIM(_, constant, _, _) | SubIM(_, constant, _, _) if constant < 256 => 0x83,
-      AddIM(..) | SubIM(..) => 0x81,
-      IncR(register) | DecR(register) if register.size() == RegisterSize::Int8 => 0xfe,
-      IncM(RegisterSize::Int8, _, _) | DecM(RegisterSize::Int8, _, _) => 0xfe,
-      IncR(..) | DecR(..) | IncM(..) | DecM(..) => 0xff,
-      AddRR(source, _) if source.size() == RegisterSize::Int8 => 0x00,
-      AddRR(..) => 0x01,
-      SubRR(source, _) if source.size() == RegisterSize::Int8 => 0x28,
-      SubRR(..) => 0x29,
-      XorRR(source, _) if source.size() == RegisterSize::Int8 => 0x30,
-      XorRR(..) => 0x31,
+
+      // addb / subb / cmpb
+      AddIM(RegisterSize::Int8, _, _, _) | SubIM(RegisterSize::Int8, _, _, _) | CmpIM(RegisterSize::Int8, _, _, _) => 0x80,
       CmpIR(_, register) if register.size() == RegisterSize::Int8 => 0x80,
-      CmpIR(constant, _) if constant < 256 => 0x83,
-      CmpIR(_, _) => 0x81,
-      CmpIM(RegisterSize::Int8, _, _, _) => 0x80,
-      CmpIM(_, constant, _, _) if constant < 256 => 0x83,
-      CmpIM(_, _, _, _) => 0x81,
+
+      // add / sub / cmp with 8-bit immediate.
+      AddIR(constant, _) | SubIR(constant, _) | CmpIR(constant, _) |
+      AddIM(_, constant, _, _) | SubIM(_, constant, _, _) | CmpIM(_, constant, _, _)
+        if constant < 256 => 0x83,
+
+      // Other add / sub / cmp
+      AddIR(..) | SubIR(..) | CmpIR(..) | AddIM(..) | SubIM(..) | CmpIM(..) => 0x81,
+
+      // movb      
+      MovRR(source, _) | MovRM(source, _, _) if source.size() == RegisterSize::Int8 => 0x88,
+      MovMR(_, _, dest) if dest.size() == RegisterSize::Int8 => 0x8a,
+
+      // mov
+      MovRR(..) | MovRM(..) => 0x89,
+      MovMR(..) => 0x8b,
+
+      MovIR(..) if !self.mov_ir_needs_modrm_byte() => 0xb8,
+      MovIR(..) => 0xc7,
+
+      // incb / decb
+      IncM(RegisterSize::Int8, _, _) | DecM(RegisterSize::Int8, _, _) => 0xfe,
+      IncR(register) | DecR(register) if register.size() == RegisterSize::Int8 => 0xfe,
+
+      // Other inc / dec
+      IncR(..) | DecR(..) | IncM(..) | DecM(..) => 0xff,
+
+      AddRR(source, _) if source.size() == RegisterSize::Int8 => 0x00,
+      SubRR(source, _) if source.size() == RegisterSize::Int8 => 0x28,
+      XorRR(source, _) if source.size() == RegisterSize::Int8 => 0x30,
+      AddRR(..) => 0x01,
+      SubRR(..) => 0x29,
+      XorRR(..) => 0x31,
+
       Jmp(constant) if constant >= -128 && constant < 128 => 0xeb,
-      Jmp(_) => 0xe9,
       Jz(constant) if constant >= -128 && constant < 128 => 0x74,
-      Jz(_) => 0x0f,
       Jnz(constant) if constant >= -128 && constant < 128 => 0x75,
-      Jnz(_) => 0x0f,
+      Jmp(_) => 0xe9,
+      Jz(_) => TWO_BYTE_ESCAPE,
+      Jnz(_) => TWO_BYTE_ESCAPE,
     };
-    machine_code.push(first_byte);
+    machine_code.push(opcode);
 
-    match *self {
-      Syscall => {
-        machine_code.push(0x05);
-      }
-      Jz(constant) if constant < -128 || constant >= 128 => {
-        machine_code.push(0x84);
-      }
-      Jnz(constant) if constant < -128 || constant >= 128 => {
-        machine_code.push(0x85);
-      }
-      _ => {}
-    };
-  }
-
-  fn group1_opcode(&self) -> u8 {
-    use MachineInstruction::*;
-
-    match *self {
-      AddIR(..) | AddIM(..) => 0b000,
-      SubIR(..) | SubIM(..) => 0b101,
-      CmpIR(..) | CmpIM(..) => 0b111,
-      _ => unreachable!()
+    if opcode == TWO_BYTE_ESCAPE {
+      machine_code.push(match *self {
+        Syscall => 0x05,
+        Jz(..) => 0x84,
+        Jnz(..) => 0x85,
+        _ => unreachable!(),
+      });
     }
   }
 
-  fn group3_opcode(&self) -> u8 {
+  fn group_opcode(&self) -> Option<u8> {
     use MachineInstruction::*;
 
     match *self {
-      IncR(..) | IncM(..) => 0x00,
-      DecR(..) | DecM(..) => 0x01,
-      _ => unreachable!()
+      // Group 1
+      AddIR(..) | AddIM(..) => Some(0b000),
+      SubIR(..) | SubIM(..) => Some(0b101),
+      CmpIR(..) | CmpIM(..) => Some(0b111),
+
+      // Group 3
+      IncR(..) | IncM(..) => Some(0b000),
+      DecR(..) | DecM(..) => Some(0b001),
+
+      // None
+      _ => None,
     }
   }
 
-  fn mov_ir_uses_b8(&self) -> bool {
+  fn mov_ir_needs_modrm_byte(&self) -> bool {
     use MachineInstruction::*;
 
     match *self {
       MovIR(constant, register) => {
-        register.size().bits() <= 32 || constant > std::u32::MAX as u64
+        register.size().bits() > 32 && constant <= std::u32::MAX as u64
       }
       _ => panic!()
     }
@@ -640,7 +624,8 @@ impl MachineInstruction {
       IncM(size, register, offset) | DecM(size, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
       }
-      _ => { println!("{:?}", *self); panic!() },
+      Push(register) | Pop(register) => ModRM::Register64(register),
+      Syscall | Ret | Jmp(..) | Jz(..) | Jnz(..) => ModRM::None,
     }
   }
 
@@ -737,6 +722,7 @@ impl MachineCode {
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
 enum ModRM {
+  None,
   Memory(RegisterSize, Register),
   MemoryTwoRegisters(Register, Register),
   MemoryTwoRegisters8BitDisplacement(Register, Register, u8),
@@ -744,6 +730,7 @@ enum ModRM {
   Memory8BitDisplacement(RegisterSize, Register, u8),
   Memory32BitDisplacement(RegisterSize, Register, u32),
   Register(Register),
+  Register64(Register),
   TwoRegisters(Register, Register),
 }
 
@@ -758,7 +745,20 @@ impl ModRM {
       ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => 0b10000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
       ModRM::Memory8BitDisplacement(_, dest, _) => 0b01000000 | (dest.number() & 0x7),
       ModRM::Memory32BitDisplacement(_, dest, _) => 0b10000000 | (dest.number() & 0x7),
+
+      ModRM::Register64(..) => {
+        // Register64 is currently only used to emit prefixes for push / pop, therefore it
+        // is never asked to emit a ModRM byte.
+        unreachable!()
+      }
+
+      ModRM::None => unreachable!()
     }
+  }
+
+  fn emit(&self, machine_code: &mut MachineCode, group_opcode: Option<u8>) {
+    machine_code.push(self.encode() | (group_opcode.unwrap_or(0) << 3));
+    self.emit_offset_if_needed(machine_code);
   }
 
   fn emit_offset_if_needed(&self, machine_code: &mut MachineCode) {
@@ -774,6 +774,8 @@ impl ModRM {
       ModRM::MemoryTwoRegisters(source, _) | ModRM::MemoryTwoRegisters8BitDisplacement(source, _, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, _, _) => {
         source.is_64_bit() || source.is_extended_register()
       }
+      ModRM::Register64(..) => self.has_extended_register(),
+      ModRM::None => false,
       _ => self.is_64_bit() || self.has_extended_register()
     }
   }
@@ -788,12 +790,13 @@ impl ModRM {
         // FIXME: Check only source?
         source.is_16_bit() || dest.is_16_bit()
       }
-      ModRM::Register(register) => {
+      ModRM::Register(register) | ModRM::Register64(register) => {
         register.is_16_bit()
       }
       ModRM::Memory(size, _) | ModRM::Memory8BitDisplacement(size, _, _) | ModRM::Memory32BitDisplacement(size, _, _) => {
         size == RegisterSize::Int16
       }
+      ModRM::None => false,
     }
   }
 
@@ -826,12 +829,13 @@ impl ModRM {
         rex |= dest.is_extended_register() as u8;
         machine_code.push(rex);
       }
-      ModRM::Register(..) | ModRM::Memory(..) | ModRM::Memory8BitDisplacement(..) | ModRM::Memory32BitDisplacement(..) => {
+      ModRM::Register(..) | ModRM::Register64(..) | ModRM::Memory(..) | ModRM::Memory8BitDisplacement(..) | ModRM::Memory32BitDisplacement(..) => {
         let mut rex = rex_marker;
         rex |= (self.is_64_bit() as u8) << 3;
         rex |= self.has_extended_register() as u8;
         machine_code.push(rex);
       }
+      ModRM::None => unreachable!()
     }
   }
 
@@ -860,12 +864,13 @@ impl ModRM {
       ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_64_bit() || dest.is_64_bit()
       }
-      ModRM::Register(register) => {
-        register.is_64_bit()
-      }
+
+      ModRM::Register(register) => register.is_64_bit(),
+
       ModRM::Memory(size, _) | ModRM::Memory8BitDisplacement(size, _, _) | ModRM::Memory32BitDisplacement(size, _, _) => {
         size == RegisterSize::Int64
       }
+      ModRM::Register64(..) | ModRM::None => false,
     }
   }
 
@@ -874,9 +879,11 @@ impl ModRM {
       ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_extended_register() || dest.is_extended_register()
       }
-      ModRM::Register(register) | ModRM::Memory(_, register) | ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
+      ModRM::Register(register) | ModRM::Register64(register) | ModRM::Memory(_, register) |
+      ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
         register.is_extended_register()
       }
+      ModRM::None => false,
     }
   }
 
@@ -1542,7 +1549,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
     }
   }
 
-  let mut epilogue = lower(&[
+  let epilogue = lower(&[
     // Compute the number of bytes written
     MovRR(output_buffer_tail, arguments[2]),
     SubRR(output_buffer_head, arguments[2]),
