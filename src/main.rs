@@ -441,6 +441,7 @@ enum MachineInstruction {
   Jmp(i32),
   Jz(i32),
   Jnz(i32),
+  Call(i32),
 }
 
 impl MachineInstruction {
@@ -465,7 +466,7 @@ impl MachineInstruction {
         modrm.emit(machine_code, self.group_opcode());
         self.emit_constant_if_needed(machine_code);
       }
-      Push(..) | Pop(..) | Ret | Syscall | Jmp(..) | Jz(..) | Jnz(..) => {
+      Push(..) | Pop(..) | Ret | Syscall | Jmp(..) | Jz(..) | Jnz(..) | Call(..) => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
@@ -542,6 +543,8 @@ impl MachineInstruction {
       Jmp(_) => 0xe9,
       Jz(_) => TWO_BYTE_ESCAPE,
       Jnz(_) => TWO_BYTE_ESCAPE,
+
+      Call(..) => 0xe8,
     };
     machine_code.push(opcode);
 
@@ -625,7 +628,7 @@ impl MachineInstruction {
         ModRM::Memory32BitDisplacement(size, register, offset)
       }
       Push(register) | Pop(register) => ModRM::Register64(register),
-      Syscall | Ret | Jmp(..) | Jz(..) | Jnz(..) => ModRM::None,
+      Syscall | Ret | Jmp(..) | Jz(..) | Jnz(..) | Call(..) => ModRM::None,
     }
   }
 
@@ -650,6 +653,9 @@ impl MachineInstruction {
           machine_code.emit_32_bit_constant(constant as u32);
         }
       },
+      Call(constant) => {
+        machine_code.emit_32_bit_constant(constant as u32);
+      }
       MovIR(constant, _) if constant > std::u32::MAX as u64 => {
         machine_code.emit_64_bit_constant(constant);
       }
@@ -1447,6 +1453,14 @@ fn show_representation(instructions: &[MachineInstruction]) {
     assert_eq!(lower(&[ Jnz( 1024) ]), vec![ 0x0f, 0x85, 0x00, 0x04, 0x00, 0x00 ]);
     assert_eq!(lower(&[ Jnz(-1024) ]), vec![ 0x0f, 0x85, 0x00, 0xfc, 0xff, 0xff ]);
   }
+
+  #[test]
+  fn test_call() {
+    assert_eq!(lower(&[ Call( 16) ]), vec![ 0xe8, 0x10, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ Call(-16) ]), vec![ 0xe8, 0xf0, 0xff, 0xff, 0xff ]);
+    assert_eq!(lower(&[ Call( 1024) ]), vec![ 0xe8, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ Call(-1024) ]), vec![ 0xe8, 0x00, 0xfc, 0xff, 0xff ]);
+  }
 }
 
 #[inline(never)]
@@ -1459,6 +1473,9 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
   let output_buffer_head = Register::R12;
   let output_buffer_tail = Register::RBX;
   let system_call_number = Register::RAX;
+  let write_scratch_byte = Register::R13B;
+
+  let write_function_length = 0x2e;
 
   let prologue = lower(&[
     Push(Register::RBP),
@@ -1467,6 +1484,44 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
     MovRR(arguments[0], tape_head),
     MovRR(arguments[1], output_buffer_head),
     MovRR(arguments[1], output_buffer_tail),
+
+    // Jump over our `write` function.
+    // FIXME: Don't hard-code the jump displacement.
+    Jmp(write_function_length),
+
+    // write
+    // FIXME: Put this at the end of the generated code to avoid having to jump over it.
+
+      // Append byte to output buffer.
+      MovMR(tape_head, 0, write_scratch_byte),
+      MovRM(write_scratch_byte, output_buffer_tail, 0),
+      IncR(output_buffer_tail),
+
+      // Don't call write until we see a newline character.
+      CmpIR(10, write_scratch_byte),
+      // FIXME: Don't hard-code the jump displacement.
+      Jnz(0x1e),
+
+      Push(tape_head),
+
+      // Compute the number of bytes written
+      MovRR(output_buffer_tail, arguments[2]),
+      SubRR(output_buffer_head, arguments[2]),
+
+      // Write output buffer to stdout
+      MovRR(output_buffer_head, arguments[1]),
+      MovIR(1, arguments[0]),
+      MovIR(0x2000004, system_call_number),
+      Syscall,
+
+      // Reset the output buffer tail to the start.
+      MovRR(output_buffer_head, output_buffer_tail),
+
+      Pop(tape_head),
+
+      Ret,
+
+    // Jump target
   ]);
 
   let mut body = Vec::new();
@@ -1538,34 +1593,10 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
         body[loop_start_patch_point + 3] = ((distance >> 24) & 0xff) as u8;
       }
       LinkedInstruction::Output => {
-        let scratch_byte = Register::R13B;
+        let call_instruction_size = 5;
+        let write_function_offset = -(body.len() as i32) - write_function_length - call_instruction_size;
         body.extend(lower(&[
-          // Append byte to output buffer.
-          MovMR(tape_head, 0, scratch_byte),
-          MovRM(scratch_byte, output_buffer_tail, 0),
-          IncR(output_buffer_tail),
-
-          // Don't call write until we see a newline character.
-          CmpIR(10, scratch_byte),
-          // FIXME: Don't hard-code the jump displacement.
-          Jnz(0x1e),
-
-          Push(tape_head),
-
-          // Compute the number of bytes written
-          MovRR(output_buffer_tail, arguments[2]),
-          SubRR(output_buffer_head, arguments[2]),
-
-          // Write output buffer to stdout
-          MovRR(output_buffer_head, arguments[1]),
-          MovIR(1, arguments[0]),
-          MovIR(0x2000004, system_call_number),
-          Syscall,
-
-          // Reset the output buffer tail to the start.
-          MovRR(output_buffer_head, output_buffer_tail),
-
-          Pop(Register::RAX),
+          Call(write_function_offset),
         ]));
       }
       _ => { println!("{:?}", instruction); panic!() }
