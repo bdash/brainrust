@@ -240,10 +240,16 @@ enum RegisterNumber {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum RegisterSize {
-  Int8,
-  Int16,
-  Int32,
-  Int64,
+  Int8 = 8,
+  Int16 = 16,
+  Int32 = 32,
+  Int64 = 64,
+}
+
+impl RegisterSize {
+  fn bits(&self) -> u8 {
+    *self as u8
+  }
 }
 
 #[allow(dead_code)]
@@ -253,6 +259,13 @@ enum Register {
   EAX,
   AX,
   AH,
+  AL,
+
+  RBX,
+  EBX,
+  BX,
+  BH,
+  BL,
 
   RSP,
   ESP,
@@ -262,7 +275,6 @@ enum Register {
 
   RCX,
   RDX,
-  RBX,
   RSI,
   RDI,
   R8,
@@ -273,6 +285,24 @@ enum Register {
   R13,
   R14,
   R15,
+
+  R8D,
+  R9D,
+  R10D,
+  R11D,
+  R12D,
+  R13D,
+  R14D,
+  R15D,
+
+  R8W,
+  R9W,
+  R10W,
+  R11W,
+  R12W,
+  R13W,
+  R14W,
+  R15W,
 
   R8B,
   R9B,
@@ -290,15 +320,21 @@ impl Register {
     match *self {
       RAX | RCX | RDX | RBX | RSP | RBP | RSI | RDI => RegisterSize::Int64,
       R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => RegisterSize::Int64,
-      EAX | ESP | EBP => RegisterSize::Int32,
-      AX => RegisterSize::Int16,
-      AH => RegisterSize::Int8,
+      EAX | EBX | ESP | EBP => RegisterSize::Int32,
+      AX | BX => RegisterSize::Int16,
+      AH | AL | BH | BL => RegisterSize::Int8,
+      R8D | R9D | R10D | R11D | R12D | R13D | R14D | R15D => RegisterSize::Int32,
+      R8W | R9W | R10W | R11W | R12W | R13W | R14W | R15W => RegisterSize::Int16,
       R8B | R9B | R10B | R11B | R12B | R13B | R14B | R15B => RegisterSize::Int8,
     }
   }
 
   fn is_64_bit(&self) -> bool {
     self.size() == RegisterSize::Int64
+  }
+
+  fn is_16_bit(&self) -> bool {
+    self.size() == RegisterSize::Int16
   }
 
   fn number(&self) -> u8 {
@@ -323,11 +359,35 @@ impl Register {
 
       EAX => RegisterNumber::RAX,
       AX  => RegisterNumber::RAX,
-      AH  => RegisterNumber::RAX,
+      AL  => RegisterNumber::RAX,
+      AH  => RegisterNumber::RSP,
+
+      EBX => RegisterNumber::RBX,
+      BX  => RegisterNumber::RBX,
+      BL  => RegisterNumber::RBX,
+      BH  => RegisterNumber::RDI,
 
       ESP => RegisterNumber::RSP,
 
       EBP => RegisterNumber::RBP,
+
+      R8D  => RegisterNumber::R8,
+      R9D  => RegisterNumber::R9,
+      R10D => RegisterNumber::R10,
+      R11D => RegisterNumber::R11,
+      R12D => RegisterNumber::R12,
+      R13D => RegisterNumber::R13,
+      R14D => RegisterNumber::R14,
+      R15D => RegisterNumber::R15,
+
+      R8W  => RegisterNumber::R8,
+      R9W  => RegisterNumber::R9,
+      R10W => RegisterNumber::R10,
+      R11W => RegisterNumber::R11,
+      R12W => RegisterNumber::R12,
+      R13W => RegisterNumber::R13,
+      R14W => RegisterNumber::R14,
+      R15W => RegisterNumber::R15,
 
       R8B  => RegisterNumber::R8,
       R9B  => RegisterNumber::R9,
@@ -365,20 +425,25 @@ enum MachineInstruction {
   IncM(RegisterSize, Register, u32),
   DecM(RegisterSize, Register, u32),
 
-  AddIR(u64, Register),
-  SubIR(u64, Register),
+  AddIR(u32, Register),
+  SubIR(u32, Register),
 
-  AddIM(u64, Register, u32),
-  SubIM(u64, Register, u32),
+  AddIM(RegisterSize, u32, Register, u32),
+  SubIM(RegisterSize, u32, Register, u32),
 
   AddRR(Register, Register),
   SubRR(Register, Register),
   XorRR(Register, Register),
+
+  CmpIR(u32, Register),
+  CmpIM(RegisterSize, u32, Register, u32),
 }
 
 impl MachineInstruction {
-  fn emit(&self, machine_code: &mut Vec<u8>) {
+  fn emit(&self, machine_code: &mut MachineCode) {
     use MachineInstruction::*;
+
+    self.validate();
 
     match *self {
       Ret | Syscall => {
@@ -389,60 +454,89 @@ impl MachineInstruction {
         if register.size() == RegisterSize::Int16 {
           machine_code.push(0x66);
         }
+        if register.is_extended_register() {
+          machine_code.push(0b01000001);
+        }
         self.emit_opcode(machine_code);
+      }
+      MovIR(_, _) if self.mov_ir_uses_b8() => {
+        let modrm = self.modrm();
+        modrm.emit_prefixes_if_needed(machine_code);
+        self.emit_opcode(machine_code);
+        self.emit_constant_if_needed(machine_code);
       }
       MovIR(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) => {
         let modrm = self.modrm();
-        modrm.emit_rex_if_needed(machine_code);
+        modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
-        machine_code.extend(&[
-          modrm.encode()
-        ]);
+        machine_code.push(modrm.encode());
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
-      AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) => {
+      AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) => {
         let modrm = self.modrm();
-        modrm.emit_rex_if_needed(machine_code);
+        modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
-        machine_code.extend(&[
-          modrm.encode() | (self.group1_opcode() << 3)
-        ]);
+        machine_code.push(modrm.encode() | (self.group1_opcode() << 3));
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
       IncR(..) | DecR(..) | IncM(..) | DecM(..) => {
         let modrm = self.modrm();
-        modrm.emit_rex_if_needed(machine_code);
+        modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
-        machine_code.extend(&[
-          modrm.encode() | (self.group3_opcode() << 3),
-        ]);
+        machine_code.push(modrm.encode() | (self.group3_opcode() << 3));
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
     }
   }
 
-  fn emit_opcode(&self, machine_code: &mut Vec<u8>) {
+  fn validate(&self) {
+    use MachineInstruction::*;
+
+    match *self {
+      MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) => {
+        assert!(source.size() == dest.size());
+      }
+      _ => {}
+    }
+  }
+
+  fn emit_opcode(&self, machine_code: &mut MachineCode) {
     use MachineInstruction::*;
 
     let first_byte = match *self {
       Ret => 0xc3,
-      Syscall => 0xf,
-      Push(register) => 0x50 | register.number(),
-      Pop(register) => 0x58 | register.number(),
+      Syscall => 0x0f,
+      Push(register) => 0x50 | (register.number() & 0x7),
+      Pop(register) => 0x58 | (register.number() & 0x7),
+      MovIR(..) if self.mov_ir_uses_b8() => 0xb8,
       MovIR(..) => 0xc7,
+      MovRR(source, _) | MovRM(source, _, _) if source.size() == RegisterSize::Int8 => 0x88,
       MovRR(..) | MovRM(..) => 0x89,
+      MovMR(_, _, dest) if dest.size() == RegisterSize::Int8 => 0x8a,
       MovMR(..) => 0x8b,
       AddIR(constant, _) | SubIR(constant, _) if constant < 256 => 0x83,
-      AddIM(..) | SubIM(..) => 0x80,
       AddIR(..) | SubIR(..) => 0x81,
+      AddIM(RegisterSize::Int8, _, _, _) | SubIM(RegisterSize::Int8, _, _, _) => 0x80,
+      AddIM(_, constant, _, _) | SubIM(_, constant, _, _) if constant < 256 => 0x83,
+      AddIM(..) | SubIM(..) => 0x81,
+      IncR(register) | DecR(register) if register.size() == RegisterSize::Int8 => 0xfe,
       IncM(RegisterSize::Int8, _, _) | DecM(RegisterSize::Int8, _, _) => 0xfe,
       IncR(..) | DecR(..) | IncM(..) | DecM(..) => 0xff,
-      AddRR(..) => 0x1,
+      AddRR(source, _) if source.size() == RegisterSize::Int8 => 0x00,
+      AddRR(..) => 0x01,
+      SubRR(source, _) if source.size() == RegisterSize::Int8 => 0x28,
       SubRR(..) => 0x29,
+      XorRR(source, _) if source.size() == RegisterSize::Int8 => 0x30,
       XorRR(..) => 0x31,
+      CmpIR(_, register) if register.size() == RegisterSize::Int8 => 0x80,
+      CmpIR(constant, _) if constant < 256 => 0x83,
+      CmpIR(_, _) => 0x81,
+      CmpIM(RegisterSize::Int8, _, _, _) => 0x80,
+      CmpIM(_, constant, _, _) if constant < 256 => 0x83,
+      CmpIM(_, _, _, _) => 0x81,
     };
     machine_code.push(first_byte);
 
@@ -458,8 +552,9 @@ impl MachineInstruction {
     use MachineInstruction::*;
 
     match *self {
-      AddIR(..) | AddIM(..) => 0x0,
-      SubIR(..) | SubIM(..) => 0x5,
+      AddIR(..) | AddIM(..) => 0b000,
+      SubIR(..) | SubIM(..) => 0b101,
+      CmpIR(..) | CmpIM(..) => 0b111,
       _ => unreachable!()
     }
   }
@@ -474,6 +569,17 @@ impl MachineInstruction {
     }
   }
 
+  fn mov_ir_uses_b8(&self) -> bool {
+    use MachineInstruction::*;
+
+    match *self {
+      MovIR(constant, register) => {
+        register.size().bits() <= 32 || constant > std::u32::MAX as u64
+      }
+      _ => panic!()
+    }
+  }
+
   fn modrm(&self) -> ModRM {
     use MachineInstruction::*;
 
@@ -485,14 +591,25 @@ impl MachineInstruction {
         // MovRM and MovMR encode the memory register second.
         ModRM::MemoryTwoRegisters(reg1, reg2)
       }
-      MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) => {
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if offset < 255 => {
+        // MovRM and MovMR encode the memory register second.
+        ModRM::MemoryTwoRegisters8BitDisplacement(reg1, reg2, offset as u8)
+      }
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) => {
+        // MovRM and MovMR encode the memory register second.
+        ModRM::MemoryTwoRegisters32BitDisplacement(reg1, reg2, offset)
+      }
+      MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) | CmpIR(_, register) => {
         ModRM::Register(register)
       }
-      AddIM(_, register, offset) | SubIM(_, register, offset) if offset == 0 => {
-        ModRM::Memory(register.size(), register)
+      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
+        ModRM::Memory(size, register)
       }
-      AddIM(_, register, offset) | SubIM(_, register, offset) if offset < 255 => {
-        ModRM::Memory8BitDisplacement(register.size(), register, offset as u8)
+      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset < 255 => {
+        ModRM::Memory8BitDisplacement(size, register, offset as u8)
+      }
+      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
+        ModRM::Memory32BitDisplacement(size, register, offset)
       }
       IncM(size, register, offset) | DecM(size, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
@@ -500,39 +617,92 @@ impl MachineInstruction {
       IncM(size, register, offset) | DecM(size, register, offset) if offset < 255 => {
         ModRM::Memory8BitDisplacement(size, register, offset as u8)
       }
+      IncM(size, register, offset) | DecM(size, register, offset) => {
+        ModRM::Memory32BitDisplacement(size, register, offset)
+      }
       _ => { println!("{:?}", *self); panic!() },
     }
   }
 
-  fn emit_constant_if_needed(&self, machine_code: &mut Vec<u8>) {
+  fn emit_constant_if_needed(&self, machine_code: &mut MachineCode) {
     use MachineInstruction::*;
 
     match *self {
-      AddIR(constant, _) | SubIR(constant, _) | AddIM(constant, _, _) | SubIM(constant, _, _) => {
+      AddIM(RegisterSize::Int8, constant, _, _) | SubIM(RegisterSize::Int8, constant, _, _) | CmpIM(RegisterSize::Int8, constant, _, _) => {
+        machine_code.emit_8_bit_constant(constant);
+      }
+      AddIR(constant, _) | SubIR(constant, _) | CmpIR(constant, _) | AddIM(_, constant, _, _) | SubIM(_, constant, _, _) | CmpIM(_, constant, _, _) => {
         if constant < 256 {
-          self.emit_8_bit_constant(machine_code, constant);
+          machine_code.emit_8_bit_constant(constant);
         } else {
-          self.emit_64_bit_constant(machine_code, constant);
+          machine_code.emit_32_bit_constant(constant);
         }
       }
+      MovIR(constant, _) if constant > std::u32::MAX as u64 => {
+        machine_code.emit_64_bit_constant(constant);
+      }
+      MovIR(constant, register) if register.size() == RegisterSize::Int32 => {
+        machine_code.emit_32_bit_constant(constant as u32);
+      }
+      MovIR(constant, register) if register.size() == RegisterSize::Int16 => {
+        machine_code.emit_16_bit_constant(constant as u32);
+      }
+      MovIR(constant, register) if register.size() == RegisterSize::Int8 => {
+        machine_code.emit_8_bit_constant(constant as u32);
+      }
       MovIR(constant, _) => {
-        self.emit_64_bit_constant(machine_code, constant);
+        machine_code.emit_32_bit_constant(constant as u32);
       }
       _ => {}
     }
   }
+}
 
-  fn emit_8_bit_constant(&self, machine_code: &mut Vec<u8>, constant: u64) {
-    assert!(constant < 255);
-    machine_code.push(constant as u8);
+struct MachineCode {
+  buffer: Vec<u8>
+}
+
+impl MachineCode {
+  fn new() -> MachineCode {
+    MachineCode { buffer: Vec::new() }
   }
 
-  fn emit_64_bit_constant(&self, machine_code: &mut Vec<u8>, constant: u64) {
-    machine_code.extend(&[
+  fn push(&mut self, byte: u8) {
+    self.buffer.push(byte);
+  }
+
+  fn emit_8_bit_constant(&mut self, constant: u32) {
+    assert!(constant < std::u8::MAX as u32);
+    self.buffer.push(constant as u8);
+  }
+
+  fn emit_16_bit_constant(&mut self, constant: u32) {
+    assert!(constant < std::u8::MAX as u32);
+    self.buffer.extend(&[
+      ((constant >>  0) & 0xff) as u8,
+      ((constant >>  8) & 0xff) as u8,
+    ]);
+  }
+
+  fn emit_32_bit_constant(&mut self, constant: u32) {
+    self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
       ((constant >> 16) & 0xff) as u8,
       ((constant >> 24) & 0xff) as u8,
+    ]);
+  }
+
+  fn emit_64_bit_constant(&mut self, constant: u64) {
+    self.buffer.extend(&[
+      ((constant >>  0) & 0xff) as u8,
+      ((constant >>  8) & 0xff) as u8,
+      ((constant >> 16) & 0xff) as u8,
+      ((constant >> 24) & 0xff) as u8,
+      ((constant >> 32) & 0xff) as u8,
+      ((constant >> 40) & 0xff) as u8,
+      ((constant >> 48) & 0xff) as u8,
+      ((constant >> 56) & 0xff) as u8,
     ]);
   }
 }
@@ -542,7 +712,8 @@ impl MachineInstruction {
 enum ModRM {
   Memory(RegisterSize, Register),
   MemoryTwoRegisters(Register, Register),
-  // FIXME: Two registers with displacement?
+  MemoryTwoRegisters8BitDisplacement(Register, Register, u8),
+  MemoryTwoRegisters32BitDisplacement(Register, Register, u32),
   Memory8BitDisplacement(RegisterSize, Register, u8),
   Memory32BitDisplacement(RegisterSize, Register, u32),
   Register(Register),
@@ -556,30 +727,72 @@ impl ModRM {
       ModRM::TwoRegisters(source, dest) => 0b11000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
       ModRM::Memory(_, dest) => 0x0 | (dest.number() & 0x7),
       ModRM::MemoryTwoRegisters(source, dest) => 0x0 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) => 0b01000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => 0b10000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
       ModRM::Memory8BitDisplacement(_, dest, _) => 0b01000000 | (dest.number() & 0x7),
       ModRM::Memory32BitDisplacement(_, dest, _) => 0b10000000 | (dest.number() & 0x7),
     }
   }
 
-  fn emit_offset_if_needed(&self, machine_code: &mut Vec<u8>) {
+  fn emit_offset_if_needed(&self, machine_code: &mut MachineCode) {
     match *self {
-      ModRM::Memory8BitDisplacement(_, _, offset) => machine_code.push(offset),
+      ModRM::Memory8BitDisplacement(_, _, offset) | ModRM::MemoryTwoRegisters8BitDisplacement(_, _, offset) => machine_code.emit_8_bit_constant(offset as u32),
+      ModRM::Memory32BitDisplacement(_, _, offset) | ModRM::MemoryTwoRegisters32BitDisplacement(_, _, offset) => machine_code.emit_32_bit_constant(offset),
       _ => {}
     }
   }
 
   fn needs_rex(&self) -> bool {
-    return self.is_64_bit() || self.has_extended_register()
+    match *self {
+      ModRM::MemoryTwoRegisters(source, _) | ModRM::MemoryTwoRegisters8BitDisplacement(source, _, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, _, _) => {
+        source.is_64_bit() || source.is_extended_register()
+      }
+      _ => self.is_64_bit() || self.has_extended_register()
+    }
   }
 
-  fn emit_rex_if_needed(&self, machine_code: &mut Vec<u8>) {
+  fn needs_operand_size_override(&self) -> bool {
+    match *self {
+      ModRM::TwoRegisters(source, dest) => {
+        assert!(source.is_16_bit() == dest.is_16_bit());
+        source.is_16_bit()
+      }
+      ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
+        // FIXME: Check only source?
+        source.is_16_bit() || dest.is_16_bit()
+      }
+      ModRM::Register(register) => {
+        register.is_16_bit()
+      }
+      ModRM::Memory(size, _) | ModRM::Memory8BitDisplacement(size, _, _) | ModRM::Memory32BitDisplacement(size, _, _) => {
+        size == RegisterSize::Int16
+      }
+    }
+  }
+
+  fn needs_address_size_override(&self) -> bool {
+    match *self {
+      ModRM::Memory(_, register) | ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
+        register.size() != RegisterSize::Int64
+      }
+      _ => false,
+    }
+  }
+
+  fn emit_prefixes_if_needed(&self, machine_code: &mut MachineCode) {
+    self.emit_operand_size_override_if_needed(machine_code);
+    self.emit_address_size_override_if_needed(machine_code);
+    self.emit_rex_if_needed(machine_code);
+  }
+
+  fn emit_rex_if_needed(&self, machine_code: &mut MachineCode) {
     if !self.needs_rex() {
       return
     }
 
     let rex_marker = 0b01000000;
     match *self {
-      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) => {
+      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         let mut rex = rex_marker;
         rex |= (source.is_64_bit() as u8) << 3;
         rex |= (source.is_extended_register() as u8) << 2;
@@ -595,13 +808,29 @@ impl ModRM {
     }
   }
 
+  fn emit_operand_size_override_if_needed(&self, machine_code: &mut MachineCode) {
+    if !self.needs_operand_size_override() {
+      return
+    }
+
+    machine_code.push(0x66);
+  }
+
+  fn emit_address_size_override_if_needed(&self, machine_code: &mut MachineCode) {
+    if !self.needs_address_size_override() {
+      return
+    }
+
+    machine_code.push(0x67);
+  }
+
   fn is_64_bit(&self) -> bool {
     match *self {
       ModRM::TwoRegisters(source, dest) => {
         assert!(source.is_64_bit() == dest.is_64_bit());
         source.is_64_bit()
       }
-      ModRM::MemoryTwoRegisters(source, dest) => {
+      ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_64_bit() || dest.is_64_bit()
       }
       ModRM::Register(register) => {
@@ -615,7 +844,7 @@ impl ModRM {
 
   fn has_extended_register(&self) -> bool {
     match *self {
-      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) => {
+      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_extended_register() || dest.is_extended_register()
       }
       ModRM::Register(register) | ModRM::Memory(_, register) | ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
@@ -627,11 +856,516 @@ impl ModRM {
 }
 
 fn lower(instructions: &[MachineInstruction]) -> Vec<u8> {
-  let mut machine_code = Vec::new();
+  let mut machine_code = MachineCode::new();
   for instruction in instructions {
     instruction.emit(&mut machine_code);
   }
-  machine_code
+  machine_code.buffer
+}
+
+#[allow(dead_code)]
+fn show_representation(instructions: &[MachineInstruction]) {
+  println!("{:?}", instructions);
+  println!("  {:}", lower(instructions).iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().connect(" "));
+}
+
+#[cfg(test)]
+ mod test {
+  use super::{lower, RegisterSize};
+  use super::MachineInstruction::*;
+  use super::Register::*;
+
+  #[test]
+  fn test_ret() {
+    assert_eq!(lower(&[ Ret ]), vec![ 0xc3 ]);
+  }
+
+  #[test]
+  fn test_syscall() {
+    assert_eq!(lower(&[ Syscall ]), vec![ 0x0f, 0x05 ]);
+  }
+
+    #[test]
+  fn test_push() {
+    assert_eq!(lower(&[ Push(RAX ) ]), vec![ 0x50 ]);
+    assert_eq!(lower(&[ Push(RCX ) ]), vec![ 0x51 ]);
+    assert_eq!(lower(&[ Push(RDX ) ]), vec![ 0x52 ]);
+    assert_eq!(lower(&[ Push(RBX ) ]), vec![ 0x53 ]);
+    assert_eq!(lower(&[ Push(RSP ) ]), vec![ 0x54 ]);
+    assert_eq!(lower(&[ Push(RBP ) ]), vec![ 0x55 ]);
+    assert_eq!(lower(&[ Push(RSI ) ]), vec![ 0x56 ]);
+    assert_eq!(lower(&[ Push(RDI ) ]), vec![ 0x57 ]);
+    assert_eq!(lower(&[ Push(R8  ) ]), vec![ 0b01000001, 0x50 ]);
+    assert_eq!(lower(&[ Push(R9  ) ]), vec![ 0b01000001, 0x51 ]);
+    assert_eq!(lower(&[ Push(R10 ) ]), vec![ 0b01000001, 0x52 ]);
+    assert_eq!(lower(&[ Push(R11 ) ]), vec![ 0b01000001, 0x53 ]);
+    assert_eq!(lower(&[ Push(R12 ) ]), vec![ 0b01000001, 0x54 ]);
+    assert_eq!(lower(&[ Push(R13 ) ]), vec![ 0b01000001, 0x55 ]);
+    assert_eq!(lower(&[ Push(R14 ) ]), vec![ 0b01000001, 0x56 ]);
+    assert_eq!(lower(&[ Push(R15 ) ]), vec![ 0b01000001, 0x57 ]);
+
+    assert_eq!(lower(&[ Push(AX ) ]), vec![              0x66, 0x50 ]);
+    assert_eq!(lower(&[ Push(R8W ) ]), vec![ 0x66, 0b01000001, 0x50 ]);
+  }
+
+  #[test]
+  fn test_pop() {
+    assert_eq!(lower(&[ Pop(RAX ) ]), vec![ 0x58 ]);
+    assert_eq!(lower(&[ Pop(RCX ) ]), vec![ 0x59 ]);
+    assert_eq!(lower(&[ Pop(RDX ) ]), vec![ 0x5a ]);
+    assert_eq!(lower(&[ Pop(RBX ) ]), vec![ 0x5b ]);
+    assert_eq!(lower(&[ Pop(RSP ) ]), vec![ 0x5c ]);
+    assert_eq!(lower(&[ Pop(RBP ) ]), vec![ 0x5d ]);
+    assert_eq!(lower(&[ Pop(RSI ) ]), vec![ 0x5e ]);
+    assert_eq!(lower(&[ Pop(RDI ) ]), vec![ 0x5f ]);
+    assert_eq!(lower(&[ Pop(R8  ) ]), vec![ 0b01000001, 0x58 ]);
+    assert_eq!(lower(&[ Pop(R9  ) ]), vec![ 0b01000001, 0x59 ]);
+    assert_eq!(lower(&[ Pop(R10 ) ]), vec![ 0b01000001, 0x5a ]);
+    assert_eq!(lower(&[ Pop(R11 ) ]), vec![ 0b01000001, 0x5b ]);
+    assert_eq!(lower(&[ Pop(R12 ) ]), vec![ 0b01000001, 0x5c ]);
+    assert_eq!(lower(&[ Pop(R13 ) ]), vec![ 0b01000001, 0x5d ]);
+    assert_eq!(lower(&[ Pop(R14 ) ]), vec![ 0b01000001, 0x5e ]);
+    assert_eq!(lower(&[ Pop(R15 ) ]), vec![ 0b01000001, 0x5f ]);
+
+    assert_eq!(lower(&[ Pop(AX ) ]), vec![              0x66, 0x58 ]);
+    assert_eq!(lower(&[ Pop(R8W ) ]), vec![ 0x66, 0b01000001, 0x58 ]);
+  }
+
+  #[test]
+  fn test_mov_ir() {
+    assert_eq!(lower(&[ MovIR(1, RAX) ]), vec![ 0b1001000, 0xc7, 0b11000000, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovIR(1, RBX) ]), vec![ 0b1001000, 0xc7, 0b11000011, 0x01, 0x00, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ MovIR(0x123456789abcde, RBX) ]), vec![ 0b1001000, 0xb8, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x00 ]);
+
+    assert_eq!(lower(& [ MovIR(1, EAX) ]), vec![       0xb8, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(& [ MovIR(1, AX ) ]), vec![ 0x66, 0xb8, 0x01, 0x00 ]);
+  }
+
+  #[test]
+  #[should_panic]
+  fn test_invalid_mov_ir() {
+    // FIXME: Is this only testing that at least one of the statements panics?
+    lower(& [ MovIR(0x123456789abcde, EAX) ]);
+    lower(& [ MovIR(0x1234, AX) ]);
+  }
+
+  #[test]
+  fn test_mov_rr() {
+    assert_eq!(lower(&[ MovRR(RAX, RBX) ]), vec![ 0b1001000, 0x89, 0b11000011 ]);
+    assert_eq!(lower(&[ MovRR(RBX, RAX) ]), vec![ 0b1001000, 0x89, 0b11011000 ]);
+    assert_eq!(lower(&[ MovRR(RAX, R8 ) ]), vec![ 0b1001001, 0x89, 0b11000000 ]);
+
+    assert_eq!(lower(&[ MovRR(EAX, EBX) ]), vec![            0x89, 0b11000011 ]);
+    assert_eq!(lower(&[ MovRR(EAX, R8D) ]), vec![ 0b1000001, 0x89, 0b11000000 ]);
+
+    assert_eq!(lower(&[ MovRR(AX, BX ) ]),  vec![            0x66, 0x89, 0b11000011 ]);
+    assert_eq!(lower(&[ MovRR(AX, R8W) ]),  vec![ 0x66, 0b1000001, 0x89, 0b11000000 ]);
+
+    assert_eq!(lower(&[ MovRR(AH, BH ) ]),  vec![            0x88, 0b11100111 ]);
+    assert_eq!(lower(&[ MovRR(AH, R8B) ]),  vec![ 0b1000001, 0x88, 0b11100000 ]);
+  }
+
+  #[test]
+  fn test_mov_rm() {
+    assert_eq!(lower(&[ MovRM(RAX, RBX, 0) ]), vec![ 0b1001000, 0x89, 0b00000011 ]);
+    assert_eq!(lower(&[ MovRM(R8,  RBX, 0) ]), vec![ 0b1001100, 0x89, 0b00000011 ]);
+    assert_eq!(lower(&[ MovRM(RBX, R8,  0) ]), vec![ 0b1001001, 0x89, 0b00011000 ]);
+
+    assert_eq!(lower(&[ MovRM(EAX, RBX, 0) ]), vec![            0x89, 0b00000011 ]);
+    assert_eq!(lower(&[ MovRM(R8D, RBX, 0) ]), vec![ 0b1000100, 0x89, 0b00000011 ]);
+
+    assert_eq!(lower(&[ MovRM(AX , RBX, 0) ]), vec![            0x66, 0x89, 0b00000011 ]);
+    assert_eq!(lower(&[ MovRM(R8W, RBX, 0) ]), vec![ 0x66, 0b1000100, 0x89, 0b00000011 ]);
+
+    assert_eq!(lower(&[ MovRM(AH , RBX, 0) ]), vec![            0x88, 0b00100011 ]);
+    assert_eq!(lower(&[ MovRM(AL , RBX, 0) ]), vec![            0x88, 0b00000011 ]);
+    assert_eq!(lower(&[ MovRM(R8B, RBX, 0) ]), vec![ 0b1000100, 0x88, 0b00000011 ]);
+
+
+    assert_eq!(lower(&[ MovRM(RAX, RBX, 16) ]), vec![ 0b1001000, 0x89, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovRM(R8,  RBX, 16) ]), vec![ 0b1001100, 0x89, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ MovRM(EAX, RBX, 16) ]), vec![            0x89, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovRM(R8D, RBX, 16) ]), vec![ 0b1000100, 0x89, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ MovRM(AX , RBX, 16) ]), vec![            0x66, 0x89, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovRM(R8W, RBX, 16) ]), vec![ 0x66, 0b1000100, 0x89, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ MovRM(AH , RBX, 16) ]), vec![            0x88, 0b01100011, 0x10 ]);
+    assert_eq!(lower(&[ MovRM(AL , RBX, 16) ]), vec![            0x88, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovRM(R8B, RBX, 16) ]), vec![ 0b1000100, 0x88, 0b01000011, 0x10 ]);
+
+
+    assert_eq!(lower(&[ MovRM(RAX, RBX, 1024) ]), vec![ 0b1001000, 0x89, 0b10000011, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovRM(R8,  RBX, 1024) ]), vec![ 0b1001100, 0x89, 0b10000011, 0x00, 0x04, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  fn test_mov_mr() {
+    assert_eq!(lower(&[ MovMR(RBX, 0, RAX) ]), vec![ 0b1001000, 0x8b, 0b00000011 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 0, R8 ) ]), vec![ 0b1001100, 0x8b, 0b00000011 ]);
+    assert_eq!(lower(&[ MovMR(R8 , 0, RBX) ]), vec![ 0b1001001, 0x8b, 0b00011000 ]);
+
+    assert_eq!(lower(&[ MovMR(RBX, 0, EAX) ]), vec![            0x8b, 0b00000011 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 0, R8D) ]), vec![ 0b1000100, 0x8b, 0b00000011 ]);
+
+    assert_eq!(lower(&[ MovMR(RBX, 0, AX ) ]), vec![            0x66, 0x8b, 0b00000011 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 0, R8W) ]), vec![ 0x66, 0b1000100, 0x8b, 0b00000011 ]);
+
+    assert_eq!(lower(&[ MovMR(RBX, 0, AH ) ]), vec![            0x8a, 0b00100011 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 0, AL ) ]), vec![            0x8a, 0b00000011 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 0, R8B) ]), vec![ 0b1000100, 0x8a, 0b00000011 ]);
+
+
+    assert_eq!(lower(&[ MovMR(RBX, 16, RAX) ]), vec![ 0b1001000, 0x8b, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 16, R8 ) ]), vec![ 0b1001100, 0x8b, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ MovMR(RBX, 16, EAX) ]), vec![            0x8b, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 16, R8D) ]), vec![ 0b1000100, 0x8b, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ MovMR(RBX, 16, AX ) ]), vec![            0x66, 0x8b, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 16, R8W) ]), vec![ 0x66, 0b1000100, 0x8b, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ MovMR(RBX, 16, AH ) ]), vec![            0x8a, 0b01100011, 0x10 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 16, AL ) ]), vec![            0x8a, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 16, R8B) ]), vec![ 0b1000100, 0x8a, 0b01000011, 0x10 ]);
+
+
+    assert_eq!(lower(&[ MovMR(RBX, 1024, RAX) ]), vec![ 0b1001000, 0x8b, 0b10000011, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovMR(RBX, 1024, R8 ) ]), vec![ 0b1001100, 0x8b, 0b10000011, 0x00, 0x04, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  fn test_inc_r() {
+    assert_eq!(lower(&[ IncR(RAX) ]), vec![ 0b1001000, 0xff, 0b11000000 ]);
+    assert_eq!(lower(&[ IncR(R8 ) ]), vec![ 0b1001001, 0xff, 0b11000000 ]);
+
+    assert_eq!(lower(&[ IncR(EAX) ]), vec![            0xff, 0b11000000 ]);
+    assert_eq!(lower(&[ IncR(R8D) ]), vec![ 0b1000001, 0xff, 0b11000000 ]);
+
+    assert_eq!(lower(&[ IncR(AX ) ]), vec![            0x66, 0xff, 0b11000000 ]);
+    assert_eq!(lower(&[ IncR(R8W) ]), vec![ 0x66, 0b1000001, 0xff, 0b11000000 ]);
+
+    assert_eq!(lower(&[ IncR(AL ) ]), vec![            0xfe, 0b11000000 ]);
+    assert_eq!(lower(&[ IncR(AH ) ]), vec![            0xfe, 0b11000100 ]);
+    assert_eq!(lower(&[ IncR(R8B) ]), vec![ 0b1000001, 0xfe, 0b11000000 ]);
+  }
+
+  #[test]
+  fn test_dec_r() {
+    assert_eq!(lower(&[ DecR(RAX) ]), vec![ 0b1001000, 0xff, 0b11001000 ]);
+    assert_eq!(lower(&[ DecR(R8 ) ]), vec![ 0b1001001, 0xff, 0b11001000 ]);
+
+    assert_eq!(lower(&[ DecR(EAX) ]), vec![            0xff, 0b11001000 ]);
+    assert_eq!(lower(&[ DecR(R8D) ]), vec![ 0b1000001, 0xff, 0b11001000 ]);
+
+    assert_eq!(lower(&[ DecR(AX ) ]), vec![            0x66, 0xff, 0b11001000 ]);
+    assert_eq!(lower(&[ DecR(R8W) ]), vec![ 0x66, 0b1000001, 0xff, 0b11001000 ]);
+
+    assert_eq!(lower(&[ DecR(AL ) ]), vec![            0xfe, 0b11001000 ]);
+    assert_eq!(lower(&[ DecR(AH ) ]), vec![            0xfe, 0b11001100 ]);
+    assert_eq!(lower(&[ DecR(R8B) ]), vec![ 0b1000001, 0xfe, 0b11001000 ]);
+  }
+
+  #[test]
+  fn test_inc_m() {
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, RAX,  0) ]), vec![       0b1001000, 0xff, 0b00000000 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, R8,   0) ]), vec![       0b1001001, 0xff, 0b00000000 ]);
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int32, RAX,  0) ]), vec![                  0xff, 0b00000000 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int16, RAX,  0) ]), vec![            0x66, 0xff, 0b00000000 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int8,  RAX,  0) ]), vec![                  0xfe, 0b00000000 ]);
+           
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, EAX,  0) ]), vec![ 0x67, 0b1001000, 0xff, 0b00000000 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, R8D,  0) ]), vec![ 0x67, 0b1001001, 0xff, 0b00000000 ]);
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int32, EAX,  0) ]), vec![            0x67, 0xff, 0b00000000 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int16, EAX,  0) ]), vec![      0x66, 0x67, 0xff, 0b00000000 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int8,  EAX,  0) ]), vec![            0x67, 0xfe, 0b00000000 ]);
+
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, RAX, 16) ]), vec![       0b1001000, 0xff, 0b01000000, 0x10 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, R8,  16) ]), vec![       0b1001001, 0xff, 0b01000000, 0x10 ]);
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int32, RAX, 16) ]), vec![                  0xff, 0b01000000, 0x10 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int16, RAX, 16) ]), vec![            0x66, 0xff, 0b01000000, 0x10 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int8,  RAX, 16) ]), vec![                  0xfe, 0b01000000, 0x10 ]);
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, EAX, 16) ]), vec![ 0x67, 0b1001000, 0xff, 0b01000000, 0x10 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, R8D, 16) ]), vec![ 0x67, 0b1001001, 0xff, 0b01000000, 0x10 ]);
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int32, EAX, 16) ]), vec![            0x67, 0xff, 0b01000000, 0x10 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int16, EAX, 16) ]), vec![      0x66, 0x67, 0xff, 0b01000000, 0x10 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int8,  EAX, 16) ]), vec![            0x67, 0xfe, 0b01000000, 0x10 ]);
+
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, EAX, 1024) ]), vec![ 0x67, 0b1001000, 0xff, 0b10000000, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ IncM(RegisterSize::Int64, R8D, 1024) ]), vec![ 0x67, 0b1001001, 0xff, 0b10000000, 0x00, 0x04, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  fn test_dec_m() {
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, RAX, 0) ]), vec![       0b1001000, 0xff, 0b00001000 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, R8,  0) ]), vec![       0b1001001, 0xff, 0b00001000 ]);
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int32, RAX, 0) ]), vec![                  0xff, 0b00001000 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int16, RAX, 0) ]), vec![            0x66, 0xff, 0b00001000 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int8,  RAX, 0) ]), vec![                  0xfe, 0b00001000 ]);
+           
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, EAX, 0) ]), vec![ 0x67, 0b1001000, 0xff, 0b00001000 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, R8D, 0) ]), vec![ 0x67, 0b1001001, 0xff, 0b00001000 ]);
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int32, EAX, 0) ]), vec![            0x67, 0xff, 0b00001000 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int16, EAX, 0) ]), vec![      0x66, 0x67, 0xff, 0b00001000 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int8,  EAX, 0) ]), vec![            0x67, 0xfe, 0b00001000 ]);
+
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, RAX, 16) ]), vec![       0b1001000, 0xff, 0b01001000, 0x10 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, R8,  16) ]), vec![       0b1001001, 0xff, 0b01001000, 0x10 ]);
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int32, RAX, 16) ]), vec![                  0xff, 0b01001000, 0x10 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int16, RAX, 16) ]), vec![            0x66, 0xff, 0b01001000, 0x10 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int8,  RAX, 16) ]), vec![                  0xfe, 0b01001000, 0x10 ]);
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, EAX, 16) ]), vec![ 0x67, 0b1001000, 0xff, 0b01001000, 0x10 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, R8D, 16) ]), vec![ 0x67, 0b1001001, 0xff, 0b01001000, 0x10 ]);
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int32, EAX, 16) ]), vec![            0x67, 0xff, 0b01001000, 0x10 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int16, EAX, 16) ]), vec![      0x66, 0x67, 0xff, 0b01001000, 0x10 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int8,  EAX, 16) ]), vec![            0x67, 0xfe, 0b01001000, 0x10 ]);
+
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, EAX, 1024) ]), vec![ 0x67, 0b1001000, 0xff, 0b10001000, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ DecM(RegisterSize::Int64, R8D, 1024) ]), vec![ 0x67, 0b1001001, 0xff, 0b10001000, 0x00, 0x04, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  fn test_add_ir() {
+    assert_eq!(lower(&[ AddIR(1, RAX) ]), vec![ 0b1001000, 0x83, 0b11000000, 0x01 ]);
+    assert_eq!(lower(&[ AddIR(1, RBX) ]), vec![ 0b1001000, 0x83, 0b11000011, 0x01 ]);
+
+    // FIXME: AddIR(0x1234, RAX) could use opcode 0x05 to avoid the ModR/M byte.
+    assert_eq!(lower(&[ AddIR(0x1234, RAX) ]), vec![ 0b1001000, 0x81, 0b11000000, 0x34, 0x12, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ AddIR(0x1234, RBX) ]), vec![ 0b1001000, 0x81, 0b11000011, 0x34, 0x12, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ AddIR(0x12345678, RAX) ]), vec![ 0b1001000, 0x81, 0b11000000, 0x78, 0x56, 0x34, 0x12 ]);
+    assert_eq!(lower(&[ AddIR(0x12345678, RBX) ]), vec![ 0b1001000, 0x81, 0b11000011, 0x78, 0x56, 0x34, 0x12 ]);
+
+    assert_eq!(lower(&[ AddIR(1,      EAX) ]), vec![ 0x83, 0b11000000, 0x01 ]);
+    // FIXME: AddIR(0x1234, EAX) could use opcode 0x05 to avoid the ModR/M byte.
+    assert_eq!(lower(&[ AddIR(0x1234, EAX) ]), vec![ 0x81, 0b11000000, 0x34, 0x12, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  fn test_sub_ir() {
+    assert_eq!(lower(&[ SubIR(1, RAX) ]), vec![ 0b1001000, 0x83, 0b11101000, 0x01 ]);
+    assert_eq!(lower(&[ SubIR(1, RBX) ]), vec![ 0b1001000, 0x83, 0b11101011, 0x01 ]);
+
+    // FIXME: SubIR(0x1234, RAX) could use opcode 0x2d to avoid the ModR/M byte.
+    assert_eq!(lower(&[ SubIR(0x1234, RAX) ]), vec![ 0b1001000, 0x81, 0b11101000, 0x34, 0x12, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ SubIR(0x1234, RBX) ]), vec![ 0b1001000, 0x81, 0b11101011, 0x34, 0x12, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ SubIR(0x12345678, RAX) ]), vec![ 0b1001000, 0x81, 0b11101000, 0x78, 0x56, 0x34, 0x12 ]);
+    assert_eq!(lower(&[ SubIR(0x12345678, RBX) ]), vec![ 0b1001000, 0x81, 0b11101011, 0x78, 0x56, 0x34, 0x12 ]);
+
+    assert_eq!(lower(&[ SubIR(1,      EAX) ]), vec![ 0x83, 0b11101000, 0x01 ]);
+    // FIXME: SubIR(0x1234, EAX) could use opcode 0x2d to avoid the ModR/M byte.
+    assert_eq!(lower(&[ SubIR(0x1234, EAX) ]), vec![ 0x81, 0b11101000, 0x34, 0x12, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  fn test_add_im() {
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, RAX, 0) ]), vec![ 0b1001000, 0x83, 0b0000000, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, R8,  0) ]), vec![ 0b1001001, 0x83, 0b0000000, 0x01 ]);
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1024, RAX, 0) ]), vec![ 0b1001000, 0x81, 0b0000000, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1024, R8,  0) ]), vec![ 0b1001001, 0x81, 0b0000000, 0x00, 0x04, 0x00, 0x00 ]);
+
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, RAX, 16) ]), vec![ 0b1001000, 0x83, 0b01000000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, R8,  16) ]), vec![ 0b1001001, 0x83, 0b01000000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1024, RAX, 16) ]), vec![ 0b1001000, 0x81, 0b01000000, 0x10, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1024, R8,  16) ]), vec![ 0b1001001, 0x81, 0b01000000, 0x10, 0x00, 0x04, 0x00, 0x00 ]);
+
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, RAX, 1024) ]), vec![ 0b1001000, 0x83, 0b10000000, 0x00, 0x04, 0x00, 0x00, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, R8,  1024) ]), vec![ 0b1001001, 0x83, 0b10000000, 0x00, 0x04, 0x00, 0x00, 0x01 ]);
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1024, RAX, 1024) ]), vec![ 0b1001000, 0x81, 0b10000000, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1024, R8,  1024) ]), vec![ 0b1001001, 0x81, 0b10000000, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00 ]);
+
+
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int32, 1, RAX, 16) ]), vec![            0x83, 0b01000000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int32, 1, R8,  16) ]), vec![ 0b1000001, 0x83, 0b01000000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int16, 1, RAX, 16) ]), vec![            0x66, 0x83, 0b01000000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int16, 1, R8,  16) ]), vec![ 0x66, 0b1000001, 0x83, 0b01000000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int8, 1, RAX, 16) ]), vec![            0x80, 0b01000000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int8, 1, R8,  16) ]), vec![ 0b1000001, 0x80, 0b01000000, 0x10, 0x01 ]);
+
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, EAX, 16) ]), vec![ 0x67, 0b1001000, 0x83, 0b01000000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int64, 1, R8D, 16) ]), vec![ 0x67, 0b1001001, 0x83, 0b01000000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int16, 1, EAX, 16) ]), vec![            0x66, 0x67, 0x83, 0b01000000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ AddIM(RegisterSize::Int16, 1, R8D, 16) ]), vec![ 0x66, 0x67, 0b1000001, 0x83, 0b01000000, 0x10, 0x01 ]);
+
+    // FIXME: Is AddIM(RegisterSize::Int64, 1, AX, 16) something we should be able to assemble?
+    // If not, we should test that we don't allow it.
+  }
+
+  #[test]
+  fn test_sub_im() {
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, RAX, 0) ]), vec![ 0b1001000, 0x83, 0b0101000, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, R8,  0) ]), vec![ 0b1001001, 0x83, 0b0101000, 0x01 ]);
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1024, RAX, 0) ]), vec![ 0b1001000, 0x81, 0b0101000, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1024, R8,  0) ]), vec![ 0b1001001, 0x81, 0b0101000, 0x00, 0x04, 0x00, 0x00 ]);
+
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, RAX, 16) ]), vec![ 0b1001000, 0x83, 0b01101000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, R8,  16) ]), vec![ 0b1001001, 0x83, 0b01101000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1024, RAX, 16) ]), vec![ 0b1001000, 0x81, 0b01101000, 0x10, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1024, R8,  16) ]), vec![ 0b1001001, 0x81, 0b01101000, 0x10, 0x00, 0x04, 0x00, 0x00 ]);
+
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, RAX, 1024) ]), vec![ 0b1001000, 0x83, 0b10101000, 0x00, 0x04, 0x00, 0x00, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, R8,  1024) ]), vec![ 0b1001001, 0x83, 0b10101000, 0x00, 0x04, 0x00, 0x00, 0x01 ]);
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1024, RAX, 1024) ]), vec![ 0b1001000, 0x81, 0b10101000, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1024, R8,  1024) ]), vec![ 0b1001001, 0x81, 0b10101000, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00 ]);
+
+
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int32, 1, RAX, 16) ]), vec![            0x83, 0b01101000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int32, 1, R8,  16) ]), vec![ 0b1000001, 0x83, 0b01101000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int16, 1, RAX, 16) ]), vec![            0x66, 0x83, 0b01101000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int16, 1, R8,  16) ]), vec![ 0x66, 0b1000001, 0x83, 0b01101000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int8, 1, RAX, 16) ]), vec![            0x80, 0b01101000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int8, 1, R8,  16) ]), vec![ 0b1000001, 0x80, 0b01101000, 0x10, 0x01 ]);
+
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, EAX, 16) ]), vec![ 0x67, 0b1001000, 0x83, 0b01101000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int64, 1, R8D, 16) ]), vec![ 0x67, 0b1001001, 0x83, 0b01101000, 0x10, 0x01 ]);
+
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int16, 1, EAX, 16) ]), vec![            0x66, 0x67, 0x83, 0b01101000, 0x10, 0x01 ]);
+    assert_eq!(lower(&[ SubIM(RegisterSize::Int16, 1, R8D, 16) ]), vec![ 0x66, 0x67, 0b1000001, 0x83, 0b01101000, 0x10, 0x01 ]);
+
+    // FIXME: Is SubIM(RegisterSize::Int64, 1, AX, 16) something we should be able to assemble?
+    // If not, we should test that we don't allow it.
+  }
+
+  #[test]
+  fn test_add_rr() {
+    assert_eq!(lower(&[ AddRR(RAX, RBX) ]), vec![ 0b1001000, 0x01, 0b11000011 ]);
+    assert_eq!(lower(&[ AddRR(R8,  RBX) ]), vec![ 0b1001100, 0x01, 0b11000011 ]);
+
+    assert_eq!(lower(&[ AddRR(EAX, EBX) ]), vec![            0x01, 0b11000011 ]);
+    assert_eq!(lower(&[ AddRR(R8D, EBX) ]), vec![ 0b1000100, 0x01, 0b11000011 ]);
+
+    assert_eq!(lower(&[ AddRR( AX,  BX) ]), vec![            0x66, 0x01, 0b11000011 ]);
+    assert_eq!(lower(&[ AddRR(R8W,  BX) ]), vec![ 0x66, 0b1000100, 0x01, 0b11000011 ]);
+
+    assert_eq!(lower(&[ AddRR( AH,  BH) ]), vec![            0x00, 0b11100111 ]);
+    assert_eq!(lower(&[ AddRR( AL,  BH) ]), vec![            0x00, 0b11000111 ]);
+    assert_eq!(lower(&[ AddRR(R8B,  BH) ]), vec![ 0b1000100, 0x00, 0b11000111 ]);
+  }
+
+  #[test]
+  #[should_panic]
+  fn test_invalid_add_rr() {
+    // FIXME: Is this only testing that at least one of the statements panics?
+    lower(&[ AddRR(RAX, EAX) ]);
+    lower(&[ AddRR(EAX, AH) ]);
+  }
+
+  #[test]
+  fn test_sub_rr() {
+    assert_eq!(lower(&[ SubRR(RAX, RBX) ]), vec![ 0b1001000, 0x29, 0b11000011 ]);
+    assert_eq!(lower(&[ SubRR(R8,  RBX) ]), vec![ 0b1001100, 0x29, 0b11000011 ]);
+
+    assert_eq!(lower(&[ SubRR(EAX, EBX) ]), vec![            0x29, 0b11000011 ]);
+    assert_eq!(lower(&[ SubRR(R8D, EBX) ]), vec![ 0b1000100, 0x29, 0b11000011 ]);
+
+    assert_eq!(lower(&[ SubRR( AX,  BX) ]), vec![            0x66, 0x29, 0b11000011 ]);
+    assert_eq!(lower(&[ SubRR(R8W,  BX) ]), vec![ 0x66, 0b1000100, 0x29, 0b11000011 ]);
+
+    assert_eq!(lower(&[ SubRR( AH,  BH) ]), vec![            0x28, 0b11100111 ]);
+    assert_eq!(lower(&[ SubRR( AL,  BH) ]), vec![            0x28, 0b11000111 ]);
+    assert_eq!(lower(&[ SubRR(R8B,  BH) ]), vec![ 0b1000100, 0x28, 0b11000111 ]);
+  }
+
+  #[test]
+  #[should_panic]
+  fn test_invalid_sub_rr() {
+    // FIXME: Is this only testing that at least one of the statements panics?
+    lower(&[ SubRR(RAX, EAX) ]);
+    lower(&[ SubRR(EAX, AH) ]);
+  }
+
+  #[test]
+  fn test_xor_rr() {
+    assert_eq!(lower(&[ XorRR(RAX, RBX) ]), vec![ 0b1001000, 0x31, 0b11000011 ]);
+    assert_eq!(lower(&[ XorRR(R8,  RBX) ]), vec![ 0b1001100, 0x31, 0b11000011 ]);
+
+    assert_eq!(lower(&[ XorRR(EAX, EBX) ]), vec![            0x31, 0b11000011 ]);
+    assert_eq!(lower(&[ XorRR(R8D, EBX) ]), vec![ 0b1000100, 0x31, 0b11000011 ]);
+
+    assert_eq!(lower(&[ XorRR( AX,  BX) ]), vec![            0x66, 0x31, 0b11000011 ]);
+    assert_eq!(lower(&[ XorRR(R8W,  BX) ]), vec![ 0x66, 0b1000100, 0x31, 0b11000011 ]);
+
+    assert_eq!(lower(&[ XorRR( AH,  BH) ]), vec![            0x30, 0b11100111 ]);
+    assert_eq!(lower(&[ XorRR( AL,  BH) ]), vec![            0x30, 0b11000111 ]);
+    assert_eq!(lower(&[ XorRR(R8B,  BH) ]), vec![ 0b1000100, 0x30, 0b11000111 ]);
+  }
+
+  #[test]
+  #[should_panic]
+  fn test_invalid_xor_rr() {
+    // FIXME: Is this only testing that at least one of the statements panics?
+    lower(&[ XorRR(RAX, EAX) ]);
+    lower(&[ XorRR(EAX, AH) ]);
+  }
+
+  #[test]
+  fn test_cmp_ir() {
+    assert_eq!(lower(&[ CmpIR(1, RBX) ]), vec![ 0b1001000, 0x83, 0b11111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIR(1024, RBX) ]), vec![ 0b1001000, 0x81, 0b11111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIR(1, EBX) ]), vec![ 0x83, 0b11111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIR(1024, EBX) ]), vec![ 0x81, 0b11111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIR(1, BX) ]), vec![ 0x66, 0x83, 0b11111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIR(1024, BX) ]), vec![ 0x66, 0x81, 0b11111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIR(1, BH) ]), vec![ 0x80, 0b11111111, 0x01 ]);
+    assert_eq!(lower(&[ CmpIR(1, BL) ]), vec![ 0x80, 0b11111011, 0x01 ]);
+  }
+
+  #[test]
+  fn test_cmp_im() {
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int64, 1,    RBX, 0) ]), vec![ 0b1001000, 0x83, 0b00111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int64, 1024, RBX, 0) ]), vec![ 0b1001000, 0x81, 0b00111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int64, 1,    EBX, 0) ]), vec![ 0x67, 0b1001000, 0x83, 0b00111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int64, 1024, EBX, 0) ]), vec![ 0x67, 0b1001000, 0x81, 0b00111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int32, 1,    RBX, 0) ]), vec![ 0x83, 0b00111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int32, 1024, RBX, 0) ]), vec![ 0x81, 0b00111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int16, 1,    RBX, 0) ]), vec![ 0x66, 0x83, 0b00111011, 0x01 ]);
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int16, 1024, RBX, 0) ]), vec![ 0x66, 0x81, 0b00111011, 0x00, 0x04, 0x00, 0x00 ]);
+
+    assert_eq!(lower(&[ CmpIM(RegisterSize::Int8, 1,    RBX, 0) ]), vec![ 0x80, 0b00111011, 0x01 ]);
+
+    // FIXME: Is CmpIM(RegisterSize::Int64, 1,    BX, 0) something we should be able to assemble?
+    // If not, we should test that we don't allow it.
+  }
 }
 
 #[inline(never)]
@@ -664,7 +1398,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           if amount == 1 {
             DecR(tape_head)
           } else {
-            SubIR(amount as u64, tape_head)
+            SubIR(amount as u32, tape_head)
           }
         ]));
       }
@@ -673,7 +1407,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           if amount == 1 {
             IncR(tape_head)
           } else {
-            AddIR(amount as u64, tape_head)
+            AddIR(amount as u32, tape_head)
           }
         ]));
       }
@@ -682,7 +1416,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           if amount == 1 {
             IncM(RegisterSize::Int8, tape_head, 0)
           } else {
-            AddIM(amount as u64, tape_head, 0)
+            AddIM(RegisterSize::Int8, amount as u32, tape_head, 0)
           }
         ]));
       }
@@ -691,7 +1425,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           if amount == 1 {
             DecM(RegisterSize::Int8, tape_head, 0)
           } else {
-            SubIM(amount as u64, tape_head, 0)
+            SubIM(RegisterSize::Int8, amount as u32, tape_head, 0)
           }
         ]));
       }
@@ -750,7 +1484,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           MovIR(0x2000004, system_call_number),
           Syscall,
 
-          // // Reset the output buffer tail to the start.
+          // Reset the output buffer tail to the start.
           MovRR(output_buffer_head, output_buffer_tail),
 
           Pop(Register::RAX),
