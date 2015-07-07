@@ -437,6 +437,10 @@ enum MachineInstruction {
 
   CmpIR(u32, Register),
   CmpIM(RegisterSize, u32, Register, u32),
+
+  Jmp(i32),
+  Jz(i32),
+  Jnz(i32),
 }
 
 impl MachineInstruction {
@@ -489,6 +493,10 @@ impl MachineInstruction {
         modrm.emit_offset_if_needed(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
+      Jmp(..) | Jz(..) | Jnz(..) => {
+        self.emit_opcode(machine_code);
+        self.emit_constant_if_needed(machine_code);
+      }
     }
   }
 
@@ -537,12 +545,24 @@ impl MachineInstruction {
       CmpIM(RegisterSize::Int8, _, _, _) => 0x80,
       CmpIM(_, constant, _, _) if constant < 256 => 0x83,
       CmpIM(_, _, _, _) => 0x81,
+      Jmp(constant) if constant >= -128 && constant < 128 => 0xeb,
+      Jmp(_) => 0xe9,
+      Jz(constant) if constant >= -128 && constant < 128 => 0x74,
+      Jz(_) => 0x0f,
+      Jnz(constant) if constant >= -128 && constant < 128 => 0x75,
+      Jnz(_) => 0x0f,
     };
     machine_code.push(first_byte);
 
     match *self {
       Syscall => {
         machine_code.push(0x05);
+      }
+      Jz(constant) if constant < -128 || constant >= 128 => {
+        machine_code.push(0x84);
+      }
+      Jnz(constant) if constant < -128 || constant >= 128 => {
+        machine_code.push(0x85);
       }
       _ => {}
     };
@@ -638,6 +658,13 @@ impl MachineInstruction {
           machine_code.emit_32_bit_constant(constant);
         }
       }
+      Jmp(constant) | Jz(constant) | Jnz(constant) => {
+        if constant >= -128 && constant < 128 {
+          machine_code.emit_8_bit_constant(constant as u8 as u32);
+        } else {
+          machine_code.emit_32_bit_constant(constant as u32);
+        }
+      },
       MovIR(constant, _) if constant > std::u32::MAX as u64 => {
         machine_code.emit_64_bit_constant(constant);
       }
@@ -1366,6 +1393,30 @@ fn show_representation(instructions: &[MachineInstruction]) {
     // FIXME: Is CmpIM(RegisterSize::Int64, 1,    BX, 0) something we should be able to assemble?
     // If not, we should test that we don't allow it.
   }
+
+  #[test]
+  fn test_jmp() {
+    assert_eq!(lower(&[ Jmp( 16) ]), vec![ 0xeb, 0x10 ]);
+    assert_eq!(lower(&[ Jmp(-16) ]), vec![ 0xeb, 0xf0 ]);
+    assert_eq!(lower(&[ Jmp( 1024) ]), vec![ 0xe9, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ Jmp(-1024) ]), vec![ 0xe9, 0x00, 0xfc, 0xff, 0xff ]);
+  }
+
+  #[test]
+  fn test_jz() {
+    assert_eq!(lower(&[ Jz( 16) ]), vec![ 0x74, 0x10 ]);
+    assert_eq!(lower(&[ Jz(-16) ]), vec![ 0x74, 0xf0 ]);
+    assert_eq!(lower(&[ Jz( 1024) ]), vec![ 0x0f, 0x84, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ Jz(-1024) ]), vec![ 0x0f, 0x84, 0x00, 0xfc, 0xff, 0xff ]);
+  }
+
+  #[test]
+  fn test_jnz() {
+    assert_eq!(lower(&[ Jnz( 16) ]), vec![ 0x75, 0x10 ]);
+    assert_eq!(lower(&[ Jnz(-16) ]), vec![ 0x75, 0xf0 ]);
+    assert_eq!(lower(&[ Jnz( 1024) ]), vec![ 0x0f, 0x85, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ Jnz(-1024) ]), vec![ 0x0f, 0x85, 0x00, 0xfc, 0xff, 0xff ]);
+  }
 }
 
 #[inline(never)]
@@ -1432,27 +1483,24 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
       LinkedInstruction::LoopStart { end: _ } => {
         body.extend(lower(&[
           CmpIM(RegisterSize::Int8, 0, tape_head, 0),
+          // Large placeholder address to force 32-bit displacement on the jump.
+          Jz(std::i32::MAX),
         ]));
-        body.extend(vec![
-          0x0f, 0x84, 0xff, 0xff, 0xff, 0xff, // jz placeholder
-        ]);
         loop_start_patch_points.insert(i, body.len() - 4);
       }
       LinkedInstruction::LoopEnd { start } => {
         let loop_start_patch_point = loop_start_patch_points[start];
-        let distance = body.len() - loop_start_patch_point + 5;
-        let offset = -(distance as i64);
+        let mut distance = body.len() - loop_start_patch_point + 1;
+
+        if distance > 128 {
+        // Adjust the jump distance to account for the larger instruction required to represent distances > 128.
+          distance += 4;
+        }
 
         body.extend(lower(&[
           CmpIM(RegisterSize::Int8, 0, tape_head, 0),
+          Jnz(-(distance as i32)),
         ]));
-        body.extend(vec![
-          0x0f, 0x85, // jnz offset
-          ((offset >>  0) & 0xff) as u8,
-          ((offset >>  8) & 0xff) as u8,
-          ((offset >> 16) & 0xff) as u8,
-          ((offset >> 24) & 0xff) as u8,
-        ]);
 
         body[loop_start_patch_point + 0] = ((distance >>  0) & 0xff) as u8;
         body[loop_start_patch_point + 1] = ((distance >>  8) & 0xff) as u8;
@@ -1469,13 +1517,9 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
 
           // Don't call write until we see a newline character.
           CmpIR(10, scratch_byte),
-        ]));
+          // FIXME: Don't hard-code the jump displacement.
+          Jnz(0x1e),
 
-        body.extend(vec![
-          0x75, 0x1e, // jneq +30
-        ]);
-
-        body.extend(lower(&[
           Push(tape_head),
 
           // Compute the number of bytes written
@@ -1502,14 +1546,11 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
     // Compute the number of bytes written
     MovRR(output_buffer_tail, arguments[2]),
     SubRR(output_buffer_head, arguments[2]),
-  ]);
 
-  epilogue.extend(vec![
     // Don't call write if we have nothing in the output buffer.
-    0x74, 0x13, // jeq +19
-  ]);
+    // FIXME: Don't hard-code the jump displacement.
+    Jz(0x13),
 
-  epilogue.extend(lower(&[
     // Write output buffer to stdout
     MovRR(output_buffer_head, arguments[1]),
     MovIR(1, arguments[0]),
@@ -1519,7 +1560,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
     XorRR(Register::RAX, Register::RAX),
     Pop(Register::RBP),
     Ret,
-  ]));
+  ]);
 
   prologue.into_iter().chain(body).chain(epilogue).collect::<Vec<u8>>()
 }
