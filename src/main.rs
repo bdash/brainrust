@@ -1430,8 +1430,10 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
         ]));
       }
       LinkedInstruction::LoopStart { end: _ } => {
+        body.extend(lower(&[
+          CmpIM(RegisterSize::Int8, 0, tape_head, 0),
+        ]));
         body.extend(vec![
-          0x80, 0x38, 0x00, // cmpb $0, (%rax)
           0x0f, 0x84, 0xff, 0xff, 0xff, 0xff, // jz placeholder
         ]);
         loop_start_patch_points.insert(i, body.len() - 4);
@@ -1441,8 +1443,10 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
         let distance = body.len() - loop_start_patch_point + 5;
         let offset = -(distance as i64);
 
+        body.extend(lower(&[
+          CmpIM(RegisterSize::Int8, 0, tape_head, 0),
+        ]));
         body.extend(vec![
-          0x80, 0x38, 0x00, // cmpb $0, (%rax)
           0x0f, 0x85, // jnz offset
           ((offset >>  0) & 0xff) as u8,
           ((offset >>  8) & 0xff) as u8,
@@ -1463,11 +1467,11 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           MovRM(scratch_byte, output_buffer_tail, 0),
           IncR(output_buffer_tail),
 
+          // Don't call write until we see a newline character.
+          CmpIR(10, scratch_byte),
         ]));
 
         body.extend(vec![
-          // Don't call write until we see a newline character.
-          0x41, 0x80, 0xfd, 0x0a, // cmp $10, %r13b
           0x75, 0x1e, // jneq +30
         ]);
 
