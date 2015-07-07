@@ -736,23 +736,25 @@ enum ModRM {
 
 impl ModRM {
   fn encode(&self) -> u8 {
-    match *self {
-      ModRM::Register(register) => 0b11000000 | (register.number() & 0x7),
-      ModRM::TwoRegisters(source, dest) => 0b11000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
-      ModRM::Memory(_, dest) => 0x0 | (dest.number() & 0x7),
-      ModRM::MemoryTwoRegisters(source, dest) => 0x0 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
-      ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) => 0b01000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
-      ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => 0b10000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
-      ModRM::Memory8BitDisplacement(_, dest, _) => 0b01000000 | (dest.number() & 0x7),
-      ModRM::Memory32BitDisplacement(_, dest, _) => 0b10000000 | (dest.number() & 0x7),
+    use ModRM::*;
 
-      ModRM::Register64(..) => {
+    match *self {
+      Register(register) => 0b11000000 | (register.number() & 0x7),
+      TwoRegisters(source, dest) => 0b11000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      Memory(_, dest) => 0x0 | (dest.number() & 0x7),
+      MemoryTwoRegisters(source, dest) => 0x0 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      MemoryTwoRegisters8BitDisplacement(source, dest, _) => 0b01000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      MemoryTwoRegisters32BitDisplacement(source, dest, _) => 0b10000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
+      Memory8BitDisplacement(_, dest, _) => 0b01000000 | (dest.number() & 0x7),
+      Memory32BitDisplacement(_, dest, _) => 0b10000000 | (dest.number() & 0x7),
+
+      Register64(..) => {
         // Register64 is currently only used to emit prefixes for push / pop, therefore it
         // is never asked to emit a ModRM byte.
         unreachable!()
       }
 
-      ModRM::None => unreachable!()
+      None => unreachable!()
     }
   }
 
@@ -762,47 +764,60 @@ impl ModRM {
   }
 
   fn emit_offset_if_needed(&self, machine_code: &mut MachineCode) {
+    use ModRM::*;
+
     match *self {
-      ModRM::Memory8BitDisplacement(_, _, offset) | ModRM::MemoryTwoRegisters8BitDisplacement(_, _, offset) => machine_code.emit_8_bit_constant(offset as u32),
-      ModRM::Memory32BitDisplacement(_, _, offset) | ModRM::MemoryTwoRegisters32BitDisplacement(_, _, offset) => machine_code.emit_32_bit_constant(offset),
+      Memory8BitDisplacement(_, _, offset) | MemoryTwoRegisters8BitDisplacement(_, _, offset) => {
+        machine_code.emit_8_bit_constant(offset as u32)
+      }
+      Memory32BitDisplacement(_, _, offset) | MemoryTwoRegisters32BitDisplacement(_, _, offset) => {
+        machine_code.emit_32_bit_constant(offset)
+      }
       _ => {}
     }
   }
 
   fn needs_rex(&self) -> bool {
+    use ModRM::*;
+
     match *self {
-      ModRM::MemoryTwoRegisters(source, _) | ModRM::MemoryTwoRegisters8BitDisplacement(source, _, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, _, _) => {
+      MemoryTwoRegisters(source, _) | MemoryTwoRegisters8BitDisplacement(source, _, _) |
+      MemoryTwoRegisters32BitDisplacement(source, _, _) => {
         source.is_64_bit() || source.is_extended_register()
       }
-      ModRM::Register64(..) => self.has_extended_register(),
-      ModRM::None => false,
+      Register64(..) => self.has_extended_register(),
+      None => false,
       _ => self.is_64_bit() || self.has_extended_register()
     }
   }
 
   fn needs_operand_size_override(&self) -> bool {
+    use ModRM::*;
+
     match *self {
-      ModRM::TwoRegisters(source, dest) => {
+      TwoRegisters(source, dest) => {
         assert!(source.is_16_bit() == dest.is_16_bit());
         source.is_16_bit()
       }
-      ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
+      MemoryTwoRegisters(source, dest) | MemoryTwoRegisters8BitDisplacement(source, dest, _) | MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         // FIXME: Check only source?
         source.is_16_bit() || dest.is_16_bit()
       }
-      ModRM::Register(register) | ModRM::Register64(register) => {
+      Register(register) | Register64(register) => {
         register.is_16_bit()
       }
-      ModRM::Memory(size, _) | ModRM::Memory8BitDisplacement(size, _, _) | ModRM::Memory32BitDisplacement(size, _, _) => {
+      Memory(size, _) | Memory8BitDisplacement(size, _, _) | Memory32BitDisplacement(size, _, _) => {
         size == RegisterSize::Int16
       }
-      ModRM::None => false,
+      None => false,
     }
   }
 
   fn needs_address_size_override(&self) -> bool {
+    use ModRM::*;
+
     match *self {
-      ModRM::Memory(_, register) | ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
+      Memory(_, register) | Memory8BitDisplacement(_, register, _) | Memory32BitDisplacement(_, register, _) => {
         register.size() != RegisterSize::Int64
       }
       _ => false,
@@ -816,26 +831,29 @@ impl ModRM {
   }
 
   fn emit_rex_if_needed(&self, machine_code: &mut MachineCode) {
+    use ModRM::*;
+
     if !self.needs_rex() {
       return
     }
 
     let rex_marker = 0b01000000;
     match *self {
-      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
+      TwoRegisters(source, dest) | MemoryTwoRegisters(source, dest) | MemoryTwoRegisters8BitDisplacement(source, dest, _) |
+      MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         let mut rex = rex_marker;
         rex |= (source.is_64_bit() as u8) << 3;
         rex |= (source.is_extended_register() as u8) << 2;
         rex |= dest.is_extended_register() as u8;
         machine_code.push(rex);
       }
-      ModRM::Register(..) | ModRM::Register64(..) | ModRM::Memory(..) | ModRM::Memory8BitDisplacement(..) | ModRM::Memory32BitDisplacement(..) => {
+      Register(..) | Register64(..) | Memory(..) | Memory8BitDisplacement(..) | Memory32BitDisplacement(..) => {
         let mut rex = rex_marker;
         rex |= (self.is_64_bit() as u8) << 3;
         rex |= self.has_extended_register() as u8;
         machine_code.push(rex);
       }
-      ModRM::None => unreachable!()
+      None => unreachable!()
     }
   }
 
@@ -856,37 +874,42 @@ impl ModRM {
   }
 
   fn is_64_bit(&self) -> bool {
+    use ModRM::*;
+
     match *self {
-      ModRM::TwoRegisters(source, dest) => {
+      TwoRegisters(source, dest) => {
         assert!(source.is_64_bit() == dest.is_64_bit());
         source.is_64_bit()
       }
-      ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
+      MemoryTwoRegisters(source, dest) | MemoryTwoRegisters8BitDisplacement(source, dest, _) |
+      MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_64_bit() || dest.is_64_bit()
       }
 
-      ModRM::Register(register) => register.is_64_bit(),
+      Register(register) => register.is_64_bit(),
 
-      ModRM::Memory(size, _) | ModRM::Memory8BitDisplacement(size, _, _) | ModRM::Memory32BitDisplacement(size, _, _) => {
+      Memory(size, _) | Memory8BitDisplacement(size, _, _) | Memory32BitDisplacement(size, _, _) => {
         size == RegisterSize::Int64
       }
-      ModRM::Register64(..) | ModRM::None => false,
+      Register64(..) | None => false,
     }
   }
 
   fn has_extended_register(&self) -> bool {
+    use ModRM::*;
+
     match *self {
-      ModRM::TwoRegisters(source, dest) | ModRM::MemoryTwoRegisters(source, dest) | ModRM::MemoryTwoRegisters8BitDisplacement(source, dest, _) | ModRM::MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
+      TwoRegisters(source, dest) | MemoryTwoRegisters(source, dest) | MemoryTwoRegisters8BitDisplacement(source, dest, _) |
+      MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_extended_register() || dest.is_extended_register()
       }
-      ModRM::Register(register) | ModRM::Register64(register) | ModRM::Memory(_, register) |
-      ModRM::Memory8BitDisplacement(_, register, _) | ModRM::Memory32BitDisplacement(_, register, _) => {
+      Register(register) | Register64(register) | Memory(_, register) |
+      Memory8BitDisplacement(_, register, _) | Memory32BitDisplacement(_, register, _) => {
         register.is_extended_register()
       }
-      ModRM::None => false,
+      None => false,
     }
   }
-
 }
 
 fn lower(instructions: &[MachineInstruction]) -> Vec<u8> {
