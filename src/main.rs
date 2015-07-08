@@ -417,26 +417,26 @@ enum MachineInstruction {
 
   MovIR(u64, Register),
   MovRR(Register, Register),
-  MovRM(Register, Register, u32),
-  MovMR(Register, u32, Register),
+  MovRM(Register, Register, i32),
+  MovMR(Register, i32, Register),
 
   IncR(Register),
   DecR(Register),
-  IncM(RegisterSize, Register, u32),
-  DecM(RegisterSize, Register, u32),
+  IncM(RegisterSize, Register, i32),
+  DecM(RegisterSize, Register, i32),
 
   AddIR(u32, Register),
   SubIR(u32, Register),
 
-  AddIM(RegisterSize, u32, Register, u32),
-  SubIM(RegisterSize, u32, Register, u32),
+  AddIM(RegisterSize, u32, Register, i32),
+  SubIM(RegisterSize, u32, Register, i32),
 
   AddRR(Register, Register),
   SubRR(Register, Register),
   XorRR(Register, Register),
 
   CmpIR(u32, Register),
-  CmpIM(RegisterSize, u32, Register, u32),
+  CmpIM(RegisterSize, u32, Register, i32),
 
   Jmp(i32),
   Jz(i32),
@@ -598,9 +598,9 @@ impl MachineInstruction {
         // MovRM and MovMR encode the memory register second.
         ModRM::MemoryTwoRegisters(reg1, reg2)
       }
-      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if offset < 255 => {
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if constant_fits_in_i8(offset) => {
         // MovRM and MovMR encode the memory register second.
-        ModRM::MemoryTwoRegisters8BitDisplacement(reg1, reg2, offset as u8)
+        ModRM::MemoryTwoRegisters8BitDisplacement(reg1, reg2, offset as i8)
       }
       MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) => {
         // MovRM and MovMR encode the memory register second.
@@ -612,8 +612,8 @@ impl MachineInstruction {
       AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset < 255 => {
-        ModRM::Memory8BitDisplacement(size, register, offset as u8)
+      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if constant_fits_in_i8(offset) => {
+        ModRM::Memory8BitDisplacement(size, register, offset as i8)
       }
       AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
@@ -621,8 +621,8 @@ impl MachineInstruction {
       IncM(size, register, offset) | DecM(size, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
       }
-      IncM(size, register, offset) | DecM(size, register, offset) if offset < 255 => {
-        ModRM::Memory8BitDisplacement(size, register, offset as u8)
+      IncM(size, register, offset) | DecM(size, register, offset) if constant_fits_in_i8(offset) => {
+        ModRM::Memory8BitDisplacement(size, register, offset as i8)
       }
       IncM(size, register, offset) | DecM(size, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
@@ -637,43 +637,47 @@ impl MachineInstruction {
 
     match *self {
       AddIM(RegisterSize::Int8, constant, _, _) | SubIM(RegisterSize::Int8, constant, _, _) | CmpIM(RegisterSize::Int8, constant, _, _) => {
-        machine_code.emit_8_bit_constant(constant);
+        machine_code.emit_u8_constant(constant);
       }
       AddIR(constant, _) | SubIR(constant, _) | CmpIR(constant, _) | AddIM(_, constant, _, _) | SubIM(_, constant, _, _) | CmpIM(_, constant, _, _) => {
         if constant < 256 {
-          machine_code.emit_8_bit_constant(constant);
+          machine_code.emit_u8_constant(constant);
         } else {
-          machine_code.emit_32_bit_constant(constant);
+          machine_code.emit_u32_constant(constant);
         }
       }
       Jmp(constant) | Jz(constant) | Jnz(constant) => {
-        if constant >= -128 && constant < 128 {
-          machine_code.emit_8_bit_constant(constant as u8 as u32);
+        if constant_fits_in_i8(constant) {
+          machine_code.emit_i8_constant(constant);
         } else {
-          machine_code.emit_32_bit_constant(constant as u32);
+          machine_code.emit_i32_constant(constant);
         }
       },
       Call(constant) => {
-        machine_code.emit_32_bit_constant(constant as u32);
+        machine_code.emit_u32_constant(constant as u32);
       }
       MovIR(constant, _) if constant > std::u32::MAX as u64 => {
-        machine_code.emit_64_bit_constant(constant);
+        machine_code.emit_u64_constant(constant);
       }
       MovIR(constant, register) if register.size() == RegisterSize::Int32 => {
-        machine_code.emit_32_bit_constant(constant as u32);
+        machine_code.emit_u32_constant(constant as u32);
       }
       MovIR(constant, register) if register.size() == RegisterSize::Int16 => {
-        machine_code.emit_16_bit_constant(constant as u32);
+        machine_code.emit_u16_constant(constant as u32);
       }
       MovIR(constant, register) if register.size() == RegisterSize::Int8 => {
-        machine_code.emit_8_bit_constant(constant as u32);
+        machine_code.emit_u8_constant(constant as u32);
       }
       MovIR(constant, _) => {
-        machine_code.emit_32_bit_constant(constant as u32);
+        machine_code.emit_u32_constant(constant as u32);
       }
       _ => {}
     }
   }
+}
+
+fn constant_fits_in_i8(offset: i32) -> bool {
+  offset >= std::i8::MIN as i32 && offset <= std::i8::MAX as i32
 }
 
 struct MachineCode {
@@ -689,12 +693,12 @@ impl MachineCode {
     self.buffer.push(byte);
   }
 
-  fn emit_8_bit_constant(&mut self, constant: u32) {
+  fn emit_u8_constant(&mut self, constant: u32) {
     assert!(constant < std::u8::MAX as u32);
     self.buffer.push(constant as u8);
   }
 
-  fn emit_16_bit_constant(&mut self, constant: u32) {
+  fn emit_u16_constant(&mut self, constant: u32) {
     assert!(constant < std::u8::MAX as u32);
     self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
@@ -702,7 +706,7 @@ impl MachineCode {
     ]);
   }
 
-  fn emit_32_bit_constant(&mut self, constant: u32) {
+  fn emit_u32_constant(&mut self, constant: u32) {
     self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
@@ -711,7 +715,7 @@ impl MachineCode {
     ]);
   }
 
-  fn emit_64_bit_constant(&mut self, constant: u64) {
+  fn emit_u64_constant(&mut self, constant: u64) {
     self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
@@ -723,6 +727,15 @@ impl MachineCode {
       ((constant >> 56) & 0xff) as u8,
     ]);
   }
+
+  fn emit_i8_constant(&mut self, constant: i32) {
+    assert!(constant_fits_in_i8(constant));
+    self.emit_u8_constant(constant as u8 as u32);
+  }
+
+  fn emit_i32_constant(&mut self, constant: i32) {
+    self.emit_u32_constant(constant as u32);
+  }
 }
 
 #[allow(dead_code)]
@@ -731,10 +744,10 @@ enum ModRM {
   None,
   Memory(RegisterSize, Register),
   MemoryTwoRegisters(Register, Register),
-  MemoryTwoRegisters8BitDisplacement(Register, Register, u8),
-  MemoryTwoRegisters32BitDisplacement(Register, Register, u32),
-  Memory8BitDisplacement(RegisterSize, Register, u8),
-  Memory32BitDisplacement(RegisterSize, Register, u32),
+  MemoryTwoRegisters8BitDisplacement(Register, Register, i8),
+  MemoryTwoRegisters32BitDisplacement(Register, Register, i32),
+  Memory8BitDisplacement(RegisterSize, Register, i8),
+  Memory32BitDisplacement(RegisterSize, Register, i32),
   Register(Register),
   Register64(Register),
   TwoRegisters(Register, Register),
@@ -774,10 +787,10 @@ impl ModRM {
 
     match *self {
       Memory8BitDisplacement(_, _, offset) | MemoryTwoRegisters8BitDisplacement(_, _, offset) => {
-        machine_code.emit_8_bit_constant(offset as u32)
+        machine_code.emit_i8_constant(offset as i32)
       }
       Memory32BitDisplacement(_, _, offset) | MemoryTwoRegisters32BitDisplacement(_, _, offset) => {
-        machine_code.emit_32_bit_constant(offset)
+        machine_code.emit_i32_constant(offset)
       }
       _ => {}
     }
