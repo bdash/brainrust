@@ -1,4 +1,4 @@
-#![feature(box_patterns)]
+#![feature(box_patterns, slice_patterns, convert)]
 
 extern crate argparse;
 extern crate itertools;
@@ -69,6 +69,7 @@ enum Node {
   MoveRight(usize),
   Add(u8),
   Subtract(u8),
+  Set(u8),
   Output,
   Input,
   Loop(Box<Node>),
@@ -115,6 +116,7 @@ impl Node {
       &MoveRight(amount) => Some(ByteCode::MoveRight(amount)),
       &Add(amount) => Some(ByteCode::Add(amount)),
       &Subtract(amount) => Some(ByteCode::Subtract(amount)),
+      &Set(value) => Some(ByteCode::Set(value)),
       &Output => Some(ByteCode::Output),
       &Input => Some(ByteCode::Input),
       &Loop(..) | &Node::Block(..) => None,
@@ -151,8 +153,13 @@ impl Node {
     use Node::*;
 
     match *self {
-      MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Input | Output => self.clone(),
-      Loop(box ref block) => Loop(Box::new(block.optimize())),
+      MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) | Input | Output => self.clone(),
+      Loop(box ref block) => {
+        match block.children().as_slice() {
+          [ Subtract(1) ] => Set(0),
+          _ => Loop(Box::new(block.optimize())),
+        }
+      }
       Block(ref children) => {
         let optimized_children = children.iter()
             .group_by(|&instruction| instruction)
@@ -178,6 +185,13 @@ impl Node {
       }
     }
   }
+
+  fn children(&self) -> Vec<Node> {
+    match *self {
+      Node::Block(ref children) => children.clone(),
+      _ => vec![],
+    }
+  }
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -186,6 +200,7 @@ enum ByteCode {
   MoveRight(usize),
   Add(u8),
   Subtract(u8),
+  Set(u8),
   Output,
   Input,
   LoopStart { end: usize },
@@ -1664,6 +1679,11 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
           } else {
             SubIM(RegisterSize::Int8, amount as u32, tape_head, 0)
           }
+        ]));
+      }
+      ByteCode::Set(value) => {
+        body.extend(lower(&[
+          MovIM(RegisterSize::Int8, value as u32, tape_head, 0)
         ]));
       }
       ByteCode::LoopStart { end: _ } => {
