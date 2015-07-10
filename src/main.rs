@@ -150,7 +150,7 @@ impl Node {
     }
   }
 
-  fn optimize(&self) -> Node {
+  fn optimize_once(&self) -> Node {
     use Node::*;
 
     match *self {
@@ -158,15 +158,27 @@ impl Node {
       Loop(box ref block) => {
         match block.children().as_slice() {
           [ Subtract(1, 0) ] => Set(0, 0),
-          _ => Loop(Box::new(block.optimize())),
+          _ => Loop(Box::new(block.optimize_once())),
         }
       }
       Block(ref children) => {
         let simplified_children = Node::simplify_mutation_sequences(children);
-        let optimized_children = simplified_children.iter().map(Node::optimize).collect();
+        let optimized_children = simplified_children.iter().map(Node::optimize_once).collect();
         Block(optimized_children)
       }
     }
+  }
+
+  fn optimize(&self) -> Node {
+    let mut node = self.clone();
+    loop {
+      let optimized = node.optimize_once();
+      if optimized == node {
+        break;
+      }
+      node = optimized;
+    }
+    node
   }
 
   fn children(&self) -> Vec<Node> {
