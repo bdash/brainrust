@@ -469,6 +469,7 @@ enum MachineInstruction {
   Pop(Register),
 
   MovIR(u64, Register),
+  MovIM(RegisterSize, u32, Register, i32),
   MovRR(Register, Register),
   MovRM(Register, Register, i32),
   MovMR(Register, i32, Register),
@@ -510,8 +511,9 @@ impl MachineInstruction {
         self.emit_opcode(machine_code);
         self.emit_constant_if_needed(machine_code);
       }
-      MovIR(..) | MovRR(..) | MovRM(..) | MovMR(..) | AddRR(..) | SubRR(..) | XorRR(..) |
-      AddIR(..) | SubIR(..) | AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) |
+      MovIR(..) | MovIM(..) | MovRR(..) | MovRM(..) | MovMR(..) |
+      AddRR(..) | SubRR(..) | XorRR(..) | AddIR(..) | SubIR(..) |
+      AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) |
       IncR(..) | DecR(..) | IncM(..) | DecM(..)  => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
@@ -534,6 +536,13 @@ impl MachineInstruction {
     match *self {
       MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) | XorRR(source, dest) => {
         assert!(source.size() == dest.size());
+      }
+      MovIM(size, constant, _, _) => {
+        match size {
+          RegisterSize::Int8 => assert!(constant <= std::u8::MAX as u32),
+          RegisterSize::Int16 => assert!(constant <= std::u16::MAX as u32),
+          _ => {}
+        }
       }
       Push(register) | Pop(register) => {
         assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
@@ -574,7 +583,8 @@ impl MachineInstruction {
       MovMR(..) => 0x8b,
 
       MovIR(..) if !self.mov_ir_needs_modrm_byte() => 0xb8,
-      MovIR(..) => 0xc7,
+      MovIM(RegisterSize::Int8, _, _, _) => 0xc6,
+      MovIR(..) | MovIM(..) => 0xc7,
 
       // incb / decb
       IncM(RegisterSize::Int8, _, _) | DecM(RegisterSize::Int8, _, _) => 0xfe,
@@ -662,13 +672,13 @@ impl MachineInstruction {
       MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) | CmpIR(_, register) => {
         ModRM::Register(register)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if constant_fits_in_i8(offset) => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if constant_fits_in_i8(offset) => {
         ModRM::Memory8BitDisplacement(size, register, offset as i8)
       }
-      AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
       }
       IncM(size, register, offset) | DecM(size, register, offset) if offset == 0 => {
@@ -689,7 +699,7 @@ impl MachineInstruction {
     use MachineInstruction::*;
 
     match *self {
-      AddIM(RegisterSize::Int8, constant, _, _) | SubIM(RegisterSize::Int8, constant, _, _) | CmpIM(RegisterSize::Int8, constant, _, _) => {
+      MovIM(RegisterSize::Int8, constant, _, _) | AddIM(RegisterSize::Int8, constant, _, _) | SubIM(RegisterSize::Int8, constant, _, _) | CmpIM(RegisterSize::Int8, constant, _, _) => {
         machine_code.emit_u8_constant(constant);
       }
       AddIR(constant, _) | SubIR(constant, _) | CmpIR(constant, _) | AddIM(_, constant, _, _) | SubIM(_, constant, _, _) | CmpIM(_, constant, _, _) => {
@@ -723,6 +733,12 @@ impl MachineInstruction {
       }
       MovIR(constant, _) => {
         machine_code.emit_u32_constant(constant as u32);
+      }
+      MovIM(RegisterSize::Int16, constant, _, _) => {
+        machine_code.emit_u16_constant(constant);
+      }
+      MovIM(_, constant, _, _) => {
+        machine_code.emit_u32_constant(constant);
       }
       _ => {}
     }
@@ -1077,6 +1093,25 @@ fn show_representation(instructions: &[MachineInstruction]) {
     // FIXME: Is this only testing that at least one of the statements panics?
     lower(& [ MovIR(0x123456789abcde, EAX) ]);
     lower(& [ MovIR(0x1234, AX) ]);
+  }
+
+  #[test]
+  fn test_mov_im() {
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int64, 1, RAX, 0) ]), vec![ 0b1001000, 0xc7, 0b00000000, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int32, 1, RAX, 0) ]), vec![ 0xc7, 0b00000000, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int16, 1, RAX, 0) ]), vec![ 0x66, 0xc7, 0b00000000, 0x01, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int8,  1, RAX, 0) ]), vec![ 0xc6, 0b00000000, 0x01 ]);
+
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int32, 1, RAX, 1) ]), vec![ 0xc7, 0b01000000, 0x01, 0x01, 0x00, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ MovIM(RegisterSize::Int32, 1, RAX, 1024) ]), vec![ 0xc7, 0b10000000, 0x00, 0x04, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 ]);
+  }
+
+  #[test]
+  #[should_panic]
+  fn test_invalid_mov_im() {
+    // FIXME: Is this only testing that at least one of the statements panics?
+    lower(&[ MovIM(RegisterSize::Int16, 0x12345678, RAX, 0) ]);
+    lower(&[ MovIM(RegisterSize::Int8,  0x1234, RAX, 0) ]);
   }
 
   #[test]
