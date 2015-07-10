@@ -1,3 +1,5 @@
+#![feature(box_patterns)]
+
 extern crate argparse;
 extern crate itertools;
 extern crate libc;
@@ -31,19 +33,155 @@ fn write_to_file(file_path: &str, buffer: &Vec<u8>) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-enum Instruction {
+enum Token {
+  MoveLeft,
+  MoveRight,
+  Add,
+  Subtract,
+  Output,
+  Input,
+  LoopStart,
+  LoopEnd,
+}
+
+impl Token {
+  fn from_byte(token: u8) -> Option<Token> {
+    use Token::*;
+
+    match token as char {
+      '<' => Some(MoveLeft),
+      '>' => Some(MoveRight),
+      '+' => Some(Add),
+      '-' => Some(Subtract),
+      '.' => Some(Output),
+      ',' => Some(Input),
+      '[' => Some(LoopStart),
+      ']' => Some(LoopEnd),
+      _ => None
+    }
+  }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum Node {
+  Block(Vec<Node>),
   MoveLeft(usize),
   MoveRight(usize),
   Add(u8),
   Subtract(u8),
   Output,
   Input,
-  LoopStart { end: Option<usize> },
-  LoopEnd { start: Option<usize> },
+  Loop(Box<Node>),
+}
+
+impl Node {
+  fn from_tokens(tokens: Vec<Token>) -> Node {
+    use Token::*;
+
+    let mut nodes: Vec<Vec<Node>> = vec![ vec![] ];
+
+    for token in tokens {
+      let node = match token {
+        MoveLeft => Some(Node::MoveLeft(1)),
+        MoveRight => Some(Node::MoveRight(1)),
+        Add => Some(Node::Add(1)),
+        Subtract => Some(Node::Subtract(1)),
+        Output => Some(Node::Output),
+        Input => Some(Node::Input),
+        LoopStart => {
+          nodes.push(Vec::new());
+          None
+        }
+        LoopEnd => Some(Node::Loop(Box::new(Node::Block(nodes.pop().unwrap())))),
+      };
+      if let Some(node) = node {
+        nodes.last_mut().unwrap().push(node);
+      };
+    }
+
+    assert_eq!(nodes.len(), 1);
+    return Node::Block(nodes.pop().unwrap());
+  }
+
+  fn compile_to_bytecode(&self) -> Vec<ByteCode> {
+    self.compile_to_bytecode_at_offset(0)
+  }
+
+  fn compile_to_bytecode_at_offset(&self, offset: usize) -> Vec<ByteCode> {
+    use Node::*;
+
+    let code = match self {
+      &MoveLeft(amount) => Some(ByteCode::MoveLeft(amount)),
+      &MoveRight(amount) => Some(ByteCode::MoveRight(amount)),
+      &Add(amount) => Some(ByteCode::Add(amount)),
+      &Subtract(amount) => Some(ByteCode::Subtract(amount)),
+      &Output => Some(ByteCode::Output),
+      &Input => Some(ByteCode::Input),
+      &Loop(..) | &Node::Block(..) => None,
+    };
+
+    if let Some(code) = code {
+      return vec![ code ]
+    }
+
+    match self {
+      &Loop(box ref block) => {
+        let block_bytecode = block.compile_to_bytecode_at_offset(offset + 1);
+        let start = ByteCode::LoopStart { end: offset + block_bytecode.len() + 1};
+        let end = ByteCode::LoopEnd { start: offset };
+
+        let mut result = vec![ start ];
+        result.extend(block_bytecode);
+        result.push(end);
+        result
+      }
+      &Block(ref children) => {
+        let mut bytecode = Vec::new();
+        for node in children {
+          let current_offset = bytecode.len() + offset;
+          bytecode.extend(node.compile_to_bytecode_at_offset(current_offset));
+        }
+        bytecode
+      }
+      _ => unreachable!()
+    }
+  }
+
+  fn optimize(&self) -> Node {
+    use Node::*;
+
+    match *self {
+      MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Input | Output => self.clone(),
+      Loop(box ref block) => Loop(Box::new(block.optimize())),
+      Block(ref children) => {
+        let optimized_children = children.iter()
+            .group_by(|&instruction| instruction)
+            .flat_map(|(key, group)| {
+          match key {
+            &Node::MoveLeft(_) => vec![Node::MoveLeft(group.len())],
+            &Node::MoveRight(_) => vec![Node::MoveRight(group.len())],
+            &Node::Add(_) => {
+              group.chunks(u8::max_value() as usize).map(|g| {
+                Node::Add(g.len() as u8)
+              }).collect()
+            },
+            &Node::Subtract(_) => {
+              group.chunks(u8::max_value() as usize).map(|g| {
+                Node::Subtract(g.len() as u8)
+              }).collect()
+            },
+            _ => group.into_iter().map(|n| n.optimize()).collect()
+          }
+        }).collect();
+
+        Block(optimized_children)
+      }
+    }
+  }
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-enum LinkedInstruction {
+enum ByteCode {
   MoveLeft(usize),
   MoveRight(usize),
   Add(u8),
@@ -54,99 +192,14 @@ enum LinkedInstruction {
   LoopEnd { start: usize },
 }
 
-impl Instruction {
-  fn from_token(token: u8) -> Option<Instruction> {
-    match token as char {
-      '<' => Some(Instruction::MoveLeft(1)),
-      '>' => Some(Instruction::MoveRight(1)),
-      '+' => Some(Instruction::Add(1)),
-      '-' => Some(Instruction::Subtract(1)),
-      '.' => Some(Instruction::Output),
-      ',' => Some(Instruction::Input),
-      '[' => Some(Instruction::LoopStart { end: None }),
-      ']' => Some(Instruction::LoopEnd { start: None }),
-      _ => None
-    }
-  }
-}
-
-impl LinkedInstruction {
-  fn from_instruction(instruction: &Instruction) -> LinkedInstruction {
-    match *instruction {
-      Instruction::MoveLeft(amount) => LinkedInstruction::MoveLeft(amount),
-      Instruction::MoveRight(amount) => LinkedInstruction::MoveRight(amount),
-      Instruction::Add(amount) => LinkedInstruction::Add(amount),
-      Instruction::Subtract(amount) => LinkedInstruction::Subtract(amount),
-      Instruction::Output => LinkedInstruction::Output,
-      Instruction::Input => LinkedInstruction::Input,
-      Instruction::LoopStart { end: Some(end) } => LinkedInstruction::LoopStart { end: end },
-      Instruction::LoopEnd { start: Some(start) } => LinkedInstruction::LoopEnd { start: start},
-      _ => panic!(),
-    }
-  }
+#[inline(never)]
+fn parse_source(source: Vec<u8>) -> Node {
+  let tokens = source.into_iter().filter_map(Token::from_byte).collect();
+  Node::from_tokens(tokens)
 }
 
 #[inline(never)]
-fn compile_to_bytecode(source: Vec<u8>) -> Vec<Instruction> {
-  source.into_iter().filter_map(Instruction::from_token).collect()
-}
-
-#[inline(never)]
-fn optimize_bytecode(instructions: Vec<Instruction>) -> Vec<Instruction> {
-  instructions.iter().group_by(|&instruction| instruction).flat_map(|(&key, group)| {
-    match key {
-      Instruction::MoveLeft(_) => vec![Instruction::MoveLeft(group.len())],
-      Instruction::MoveRight(_) => vec![Instruction::MoveRight(group.len())],
-      Instruction::Add(_) => {
-        group.chunks(u8::max_value() as usize).map(|g| {
-          Instruction::Add(g.len() as u8)
-        }).collect()
-      },
-      Instruction::Subtract(_) => {
-        group.chunks(u8::max_value() as usize).map(|g| {
-          Instruction::Subtract(g.len() as u8)
-        }).collect()
-      },
-      _ => group.iter().map(|&instruction| *instruction).collect()
-    }
-  }).collect()
-}
-
-#[inline(never)]
-fn link_bytecode(source: Vec<Instruction>) -> Vec<LinkedInstruction> {
-  let mut loop_starts = Vec::new();
-  let mut loop_ends = VecMap::new();
-  let phase1: Vec<(usize, Instruction)>;
-  {
-    phase1 = source.into_iter().enumerate().map(|(i, instruction)| {
-      match instruction {
-        Instruction::LoopStart { end: None } => {
-          loop_starts.push(i);
-          (i, instruction)
-        }
-        Instruction::LoopEnd { start: None } => {
-          let start = loop_starts.pop().unwrap();
-          loop_ends.insert(start, i);
-          (i, Instruction::LoopEnd { start: Some(start) })
-        },
-        _ => (i, instruction)
-      }
-    }).collect();
-  }
-
-  phase1.into_iter().map(|(i, instruction)| {
-    match instruction {
-      Instruction::LoopStart { end: None } => {
-        let end = loop_ends.get(&i).unwrap();
-        LinkedInstruction::LoopStart { end: *end }
-      },
-      _ => LinkedInstruction::from_instruction(&instruction)
-      }
-  }).collect()
-}
-
-#[inline(never)]
-unsafe fn execute_bytecode(instructions: &Vec<LinkedInstruction>) {
+unsafe fn execute_bytecode(instructions: &Vec<ByteCode>) {
   let mut output = Vec::with_capacity(256);
   let mut tape = vec![0u8; 1024];
   let mut tape_head = 0;
@@ -155,31 +208,31 @@ unsafe fn execute_bytecode(instructions: &Vec<LinkedInstruction>) {
     let instruction = instructions.get_unchecked(ip);
 
     match *instruction {
-      LinkedInstruction::MoveLeft(amount) => tape_head -= amount,
-      LinkedInstruction::MoveRight(amount) => tape_head += amount,
+      ByteCode::MoveLeft(amount) => tape_head -= amount,
+      ByteCode::MoveRight(amount) => tape_head += amount,
 
-      LinkedInstruction::Add(amount) => {
+      ByteCode::Add(amount) => {
         let value = tape.get_unchecked_mut(tape_head);
         *value = value.wrapping_add(amount);
       }
-      LinkedInstruction::Subtract(amount) => {
+      ByteCode::Subtract(amount) => {
         let value = tape.get_unchecked_mut(tape_head);
         *value = value.wrapping_sub(amount);
       }
 
-      LinkedInstruction::LoopStart { end } => {
+      ByteCode::LoopStart { end } => {
         if *tape.get_unchecked(tape_head) == 0 {
           ip = end + 1;
           continue
         }
       }
-      LinkedInstruction::LoopEnd { start } => {
+      ByteCode::LoopEnd { start } => {
         if *tape.get_unchecked(tape_head) != 0 {
           ip = start + 1;
           continue
         }
       }
-      LinkedInstruction::Output => {
+      ByteCode::Output => {
         let c = *tape.get_unchecked(tape_head);
         output.push(c);
         if c as char == '\n' {
@@ -1477,7 +1530,7 @@ fn show_representation(instructions: &[MachineInstruction]) {
 }
 
 #[inline(never)]
-fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
+fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
   use MachineInstruction::*;
 
   let arguments = &[Register::RDI, Register::RSI, Register::RDX];
@@ -1542,7 +1595,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
   for (i, &instruction) in instructions.iter().enumerate() {
 
     match instruction {
-      LinkedInstruction::MoveLeft(amount) => {
+      ByteCode::MoveLeft(amount) => {
         body.extend(lower(&[
           if amount == 1 {
             DecR(tape_head)
@@ -1551,7 +1604,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           }
         ]));
       }
-      LinkedInstruction::MoveRight(amount) => {
+      ByteCode::MoveRight(amount) => {
         body.extend(lower(&[
           if amount == 1 {
             IncR(tape_head)
@@ -1560,7 +1613,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           }
         ]));
       }
-      LinkedInstruction::Add(amount) => {
+      ByteCode::Add(amount) => {
         body.extend(lower(&[
           if amount == 1 {
             IncM(RegisterSize::Int8, tape_head, 0)
@@ -1569,7 +1622,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           }
         ]));
       }
-      LinkedInstruction::Subtract(amount) => {
+      ByteCode::Subtract(amount) => {
         body.extend(lower(&[
           if amount == 1 {
             DecM(RegisterSize::Int8, tape_head, 0)
@@ -1578,7 +1631,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
           }
         ]));
       }
-      LinkedInstruction::LoopStart { end: _ } => {
+      ByteCode::LoopStart { end: _ } => {
         body.extend(lower(&[
           CmpIM(RegisterSize::Int8, 0, tape_head, 0),
           // Large placeholder address to force 32-bit displacement on the jump.
@@ -1586,7 +1639,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
         ]));
         loop_start_patch_points.insert(i, body.len() - 4);
       }
-      LinkedInstruction::LoopEnd { start } => {
+      ByteCode::LoopEnd { start } => {
         let loop_start_patch_point = loop_start_patch_points[start];
         let mut distance = body.len() - loop_start_patch_point + 1;
 
@@ -1605,7 +1658,7 @@ fn compile_to_machinecode(instructions: &Vec<LinkedInstruction>) -> Vec<u8> {
         body[loop_start_patch_point + 2] = ((distance >> 16) & 0xff) as u8;
         body[loop_start_patch_point + 3] = ((distance >> 24) & 0xff) as u8;
       }
-      LinkedInstruction::Output => {
+      ByteCode::Output => {
         let call_instruction_size = 5;
         let write_function_offset = -(body.len() as i32) - write_function_length - call_instruction_size;
         body.extend(lower(&[
@@ -1673,7 +1726,9 @@ fn main() {
   }
 
   let source = load_file(&input_file_path).unwrap();
-  let bytecode = link_bytecode(optimize_bytecode(compile_to_bytecode(source)));
+  let root = parse_source(source);
+  let optimized = root.optimize();
+  let bytecode = optimized.compile_to_bytecode();
 
   match execution_model {
     ExecutionModel::Interpret => unsafe { execute_bytecode(&bytecode) },
