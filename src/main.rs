@@ -6,6 +6,7 @@ extern crate libc;
 extern crate unreachable;
 extern crate vec_map;
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Result, Read, Write, stdout};
 use std::mem;
@@ -161,26 +162,8 @@ impl Node {
         }
       }
       Block(ref children) => {
-        let optimized_children = children.iter()
-            .group_by(|&instruction| instruction)
-            .flat_map(|(key, group)| {
-          match key {
-            &Node::MoveLeft(_) => vec![Node::MoveLeft(group.len())],
-            &Node::MoveRight(_) => vec![Node::MoveRight(group.len())],
-            &Node::Add(_, 0) => {
-              group.chunks(u8::max_value() as usize).map(|g| {
-                Node::Add(g.len() as u8, 0)
-              }).collect()
-            },
-            &Node::Subtract(_, 0) => {
-              group.chunks(u8::max_value() as usize).map(|g| {
-                Node::Subtract(g.len() as u8, 0)
-              }).collect()
-            },
-            _ => group.into_iter().map(|n| n.optimize()).collect()
-          }
-        }).collect();
-
+        let simplified_children = Node::simplify_mutation_sequences(children);
+        let optimized_children = simplified_children.iter().map(Node::optimize).collect();
         Block(optimized_children)
       }
     }
@@ -192,7 +175,115 @@ impl Node {
       _ => vec![],
     }
   }
+
+  fn is_mutation(&self) -> bool {
+    use Node::*;
+
+    match *self {
+      MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) => true,
+      _ => false,
+    }
+  }
+
+  fn simplify_mutation_sequences(children: &Vec<Node>) -> Vec<Node> {
+    use Node::*;
+
+    children.iter().group_by(|&node| node.is_mutation()).flat_map(|(key, group)| {
+      match key {
+        true => {
+          let (index, mutations) = evaluate_mutations(&group);
+
+          let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
+          modified_offsets.sort();
+
+          modified_offsets.iter().flat_map(|offset| {
+            let value = mutations[*offset];
+            match value {
+              Mutation::Subtract(value) => Some(Subtract(value as u8, **offset)),
+              Mutation::Add(value) => Some(Add(value as u8, **offset)),
+              Mutation::Set(value) => Some(Set(value as u8, **offset))
+            }
+          }).chain(
+            match index.signum() {
+               1 => Some(MoveRight(index as usize)),
+              -1 => Some(MoveLeft(index.abs() as usize)),
+               _ => None
+            }
+          ).collect::<Vec<_>>()
+        }
+        false => group.iter().map(|&node| node.clone()).collect()
+      }
+    }).collect()
+  }
 }
+
+#[derive(Copy, Clone, Debug)]
+enum Mutation {
+  Add(i8),
+  Subtract(i8),
+  Set(i8),
+}
+
+impl Mutation {
+  fn combine(&mut self, other: Mutation) {
+    use Mutation::*;
+
+    *self = match (*self, other) {
+      (_,           Set(_))           => other,
+      (Set(base),   Add(amount))      => Set(base + amount),
+      (Set(base),   Subtract(amount)) => Set(base - amount),
+      (Add(a),      Add(b))           => Add(a + b),
+      (Subtract(a), Subtract(b))      => Subtract(a + b),
+      (Add(a),      Subtract(b))      => {
+        match (a - b).signum() {
+          1 | 0 => Add(a - b),
+          -1 => Subtract(b - a),
+          _ => unreachable!(),
+        }
+      }
+      (Subtract(a), Add(b)) => {
+        match (b - a).signum() {
+          1 | 0 => Add(a - b),
+          -1 => Subtract(b - a),
+          _ => unreachable!(),
+        }
+      }
+    }
+  }
+}
+
+fn evaluate_mutations(nodes: &Vec<&Node>) -> (i32, HashMap<i32, Mutation>) {
+  use Node::*;
+
+  let mut mutations = HashMap::new();
+  let mut index = 0i32;
+
+  for node in nodes {
+    match **node {
+      MoveLeft(amount) => {
+        index -= amount as i32;
+      }
+      MoveRight(amount) => {
+        index += amount as i32;
+      }
+      Add(amount, offset) => {
+        let value = mutations.entry(index + offset).or_insert(Mutation::Add(0));
+        value.combine(Mutation::Add(amount as i8));
+      }
+      Subtract(amount, offset) => {
+        let value = mutations.entry(index + offset).or_insert(Mutation::Add(0));
+        value.combine(Mutation::Subtract(amount as i8));
+      }
+      Set(amount, offset) => {
+        let value = mutations.entry(index + offset).or_insert(Mutation::Set(0));
+        value.combine(Mutation::Set(amount as i8));
+      }
+      _ => panic!()
+    }
+  }
+  (index, mutations)
+}
+
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 enum ByteCode {
