@@ -67,9 +67,9 @@ enum Node {
   Block(Vec<Node>),
   MoveLeft(usize),
   MoveRight(usize),
-  Add(u8),
-  Subtract(u8),
-  Set(u8),
+  Add(u8, i32),
+  Subtract(u8, i32),
+  Set(u8, i32),
   Output,
   Input,
   Loop(Box<Node>),
@@ -85,8 +85,8 @@ impl Node {
       let node = match token {
         MoveLeft => Some(Node::MoveLeft(1)),
         MoveRight => Some(Node::MoveRight(1)),
-        Add => Some(Node::Add(1)),
-        Subtract => Some(Node::Subtract(1)),
+        Add => Some(Node::Add(1, 0)),
+        Subtract => Some(Node::Subtract(1, 0)),
         Output => Some(Node::Output),
         Input => Some(Node::Input),
         LoopStart => {
@@ -114,9 +114,9 @@ impl Node {
     let code = match self {
       &MoveLeft(amount) => Some(ByteCode::MoveLeft(amount)),
       &MoveRight(amount) => Some(ByteCode::MoveRight(amount)),
-      &Add(amount) => Some(ByteCode::Add(amount)),
-      &Subtract(amount) => Some(ByteCode::Subtract(amount)),
-      &Set(value) => Some(ByteCode::Set(value)),
+      &Add(amount, offset) => Some(ByteCode::Add(amount, offset)),
+      &Subtract(amount, offset) => Some(ByteCode::Subtract(amount, offset)),
+      &Set(value, offset) => Some(ByteCode::Set(value, offset)),
       &Output => Some(ByteCode::Output),
       &Input => Some(ByteCode::Input),
       &Loop(..) | &Node::Block(..) => None,
@@ -156,7 +156,7 @@ impl Node {
       MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) | Input | Output => self.clone(),
       Loop(box ref block) => {
         match block.children().as_slice() {
-          [ Subtract(1) ] => Set(0),
+          [ Subtract(1, 0) ] => Set(0, 0),
           _ => Loop(Box::new(block.optimize())),
         }
       }
@@ -167,14 +167,14 @@ impl Node {
           match key {
             &Node::MoveLeft(_) => vec![Node::MoveLeft(group.len())],
             &Node::MoveRight(_) => vec![Node::MoveRight(group.len())],
-            &Node::Add(_) => {
+            &Node::Add(_, 0) => {
               group.chunks(u8::max_value() as usize).map(|g| {
-                Node::Add(g.len() as u8)
+                Node::Add(g.len() as u8, 0)
               }).collect()
             },
-            &Node::Subtract(_) => {
+            &Node::Subtract(_, 0) => {
               group.chunks(u8::max_value() as usize).map(|g| {
-                Node::Subtract(g.len() as u8)
+                Node::Subtract(g.len() as u8, 0)
               }).collect()
             },
             _ => group.into_iter().map(|n| n.optimize()).collect()
@@ -198,9 +198,9 @@ impl Node {
 enum ByteCode {
   MoveLeft(usize),
   MoveRight(usize),
-  Add(u8),
-  Subtract(u8),
-  Set(u8),
+  Add(u8, i32),
+  Subtract(u8, i32),
+  Set(u8, i32),
   Output,
   Input,
   LoopStart { end: usize },
@@ -226,13 +226,17 @@ unsafe fn execute_bytecode(instructions: &Vec<ByteCode>) {
       ByteCode::MoveLeft(amount) => tape_head -= amount,
       ByteCode::MoveRight(amount) => tape_head += amount,
 
-      ByteCode::Add(amount) => {
-        let value = tape.get_unchecked_mut(tape_head);
+      ByteCode::Add(amount, offset) => {
+        let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
         *value = value.wrapping_add(amount);
       }
-      ByteCode::Subtract(amount) => {
-        let value = tape.get_unchecked_mut(tape_head);
+      ByteCode::Subtract(amount, offset) => {
+        let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
         *value = value.wrapping_sub(amount);
+      }
+      ByteCode::Set(constant, offset) => {
+        let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
+        *value = constant;
       }
 
       ByteCode::LoopStart { end } => {
@@ -1663,27 +1667,27 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
           }
         ]));
       }
-      ByteCode::Add(amount) => {
+      ByteCode::Add(amount, offset) => {
         body.extend(lower(&[
           if amount == 1 {
-            IncM(RegisterSize::Int8, tape_head, 0)
+            IncM(RegisterSize::Int8, tape_head, offset)
           } else {
-            AddIM(RegisterSize::Int8, amount as u32, tape_head, 0)
+            AddIM(RegisterSize::Int8, amount as u32, tape_head, offset)
           }
         ]));
       }
-      ByteCode::Subtract(amount) => {
+      ByteCode::Subtract(amount, offset) => {
         body.extend(lower(&[
           if amount == 1 {
-            DecM(RegisterSize::Int8, tape_head, 0)
+            DecM(RegisterSize::Int8, tape_head, offset)
           } else {
-            SubIM(RegisterSize::Int8, amount as u32, tape_head, 0)
+            SubIM(RegisterSize::Int8, amount as u32, tape_head, offset)
           }
         ]));
       }
-      ByteCode::Set(value) => {
+      ByteCode::Set(value, offset) => {
         body.extend(lower(&[
-          MovIM(RegisterSize::Int8, value as u32, tape_head, 0)
+          MovIM(RegisterSize::Int8, value as u32, tape_head, offset)
         ]));
       }
       ByteCode::LoopStart { end: _ } => {
