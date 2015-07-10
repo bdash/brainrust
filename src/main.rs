@@ -782,12 +782,12 @@ impl MachineCode {
   }
 
   fn emit_u8_constant(&mut self, constant: u32) {
-    assert!(constant < std::u8::MAX as u32);
+    assert!(constant <= std::u8::MAX as u32);
     self.buffer.push(constant as u8);
   }
 
   fn emit_u16_constant(&mut self, constant: u32) {
-    assert!(constant < std::u8::MAX as u32);
+    assert!(constant <= std::u16::MAX as u32);
     self.buffer.extend(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
