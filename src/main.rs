@@ -666,6 +666,14 @@ impl MachineInstruction {
           _ => {}
         }
       }
+      MovIR(constant, register) => {
+        match register.size() {
+          RegisterSize::Int8 => assert!(constant <= std::u8::MAX as u64),
+          RegisterSize::Int16 => assert!(constant <= std::u16::MAX as u64),
+          RegisterSize::Int32 => assert!(constant <= std::u32::MAX as u64),
+          _ => {}
+        }
+      }
       Push(register) | Pop(register) => {
         assert!(register.size() == RegisterSize::Int16 || register.size() == RegisterSize::Int64);
       }
