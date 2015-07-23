@@ -4,35 +4,16 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-fn simplify_mutation_sequences(children: &Vec<Node>) -> Vec<Node> {
-  use super::ast::Node::*;
-
-  children.iter().group_by(|&node| node.is_mutation()).flat_map(|(key, group)| {
-    match key {
-      true => {
-        let (index, mutations) = evaluate_mutations(&group);
-
-        let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
-        modified_offsets.sort();
-
-        modified_offsets.iter().flat_map(|offset| {
-          let value = mutations[*offset];
-          match value {
-            Mutation::Subtract(value) => Some(Subtract(value as u8, **offset)),
-            Mutation::Add(value) => Some(Add(value as u8, **offset)),
-            Mutation::Set(value) => Some(Set(value as u8, **offset))
-          }
-        }).chain(
-          match index.signum() {
-             1 => Some(MoveRight(index as usize)),
-            -1 => Some(MoveLeft(index.abs() as usize)),
-             _ => None
-          }
-        ).collect::<Vec<_>>()
-      }
-      false => group.iter().map(|&node| node.clone()).collect()
+pub fn optimize(node: &Node) -> Node {
+  let mut node = node.clone();
+  loop {
+    let optimized = optimize_once(&node);
+    if optimized == node {
+      break;
     }
-  }).collect()
+    node = optimized;
+  }
+  node
 }
 
 fn optimize_once(node: &Node) -> Node {
@@ -53,19 +34,6 @@ fn optimize_once(node: &Node) -> Node {
     }
   }
 }
-
-pub fn optimize(node: &Node) -> Node {
-  let mut node = node.clone();
-  loop {
-    let optimized = optimize_once(&node);
-    if optimized == node {
-      break;
-    }
-    node = optimized;
-  }
-  node
-}
-
 
 #[derive(Copy, Clone, Debug)]
 enum Mutation {
@@ -100,6 +68,37 @@ impl Mutation {
       }
     }
   }
+}
+
+fn simplify_mutation_sequences(children: &Vec<Node>) -> Vec<Node> {
+  use super::ast::Node::*;
+
+  children.iter().group_by(|&node| node.is_mutation()).flat_map(|(key, group)| {
+    match key {
+      true => {
+        let (index, mutations) = evaluate_mutations(&group);
+
+        let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
+        modified_offsets.sort();
+
+        modified_offsets.iter().flat_map(|offset| {
+          let value = mutations[*offset];
+          match value {
+            Mutation::Subtract(value) => Some(Subtract(value as u8, **offset)),
+            Mutation::Add(value) => Some(Add(value as u8, **offset)),
+            Mutation::Set(value) => Some(Set(value as u8, **offset))
+          }
+        }).chain(
+          match index.signum() {
+             1 => Some(MoveRight(index as usize)),
+            -1 => Some(MoveLeft(index.abs() as usize)),
+             _ => None
+          }
+        ).collect::<Vec<_>>()
+      }
+      false => group.iter().map(|&node| node.clone()).collect()
+    }
+  }).collect()
 }
 
 fn evaluate_mutations(nodes: &Vec<&Node>) -> (i32, HashMap<i32, Mutation>) {
