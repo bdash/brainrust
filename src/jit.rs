@@ -28,11 +28,15 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
   let output_buffer_tail = Register::RBX;
   let system_call_number = Register::RAX;
   let write_scratch_byte = Register::R13B;
+  let write_scratch_byte_register = Register::R13;
 
   let write_function_length = 0x2e;
 
   let prologue = lower(&[
     Push(Register::RBP),
+    Push(output_buffer_head),
+    Push(output_buffer_tail),
+    Push(write_scratch_byte_register),
     MovRR(Register::RSP, Register::RBP),
 
     MovRR(arguments[0], tape_head),
@@ -178,6 +182,9 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
     Syscall,
 
     XorRR(Register::RAX, Register::RAX),
+    Pop(write_scratch_byte_register),
+    Pop(output_buffer_tail),
+    Pop(output_buffer_head),
     Pop(Register::RBP),
     Ret,
   ]);
