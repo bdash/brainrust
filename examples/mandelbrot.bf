@@ -1,4 +1,6 @@
- A mandelbrot set fractal viewer in brainfuck written by Erik Bosman
+[ A mandelbrot set fractal viewer in brainfuck written by Erik Bosman
+  From http://esoteric.sange.fi/brainfuck/utils/mandelbrot/ ]
+
 +++++++++++++[->++>>>+++++>++>+<<<<<<]>>>>>++++++>--->>>>>>>>>>+++++++++++++++[[
 >>>>>>>>>]+[<<<<<<<<<]>>>>>>>>>-]+[>>>>>>>>[-]>]<<<<<<<<<[<<<<<<<<<]>>>>>>>>[-]+
 <<<<<<<+++++[-[->>>>>>>>>+<<<<<<<<<]>>>>>>>>>]>>>>>>>+>>>>>>>>>>>>>>>>>>>>>>>>>>

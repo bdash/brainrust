@@ -1,1 +1,1 @@
-mandelbrot.bf
+examples/mandelbrot.bf
