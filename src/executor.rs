@@ -3,6 +3,9 @@ use super::bytecode::ByteCode;
 use super::{interpreter, jit, optimizer};
 use super::parser::Token;
 
+#[cfg(feature="llvm")]
+use super::llvm;
+
 pub struct Executor {
   ast: Node,
 }
@@ -18,6 +21,11 @@ impl Executor {
     match execution_model {
      ExecutionModel::Interpret => interpreter::execute_bytecode(&bytecode),
       ExecutionModel::JIT => jit::execute_bytecode(&bytecode),
+
+      #[cfg(feature="llvm")]
+      ExecutionModel::LLVM => llvm::execute_bytecode(&bytecode),
+      #[cfg(not(feature="llvm"))]
+      ExecutionModel::LLVM => panic!("LLVM is not available"),
     }
   }
 
@@ -30,4 +38,5 @@ impl Executor {
 pub enum ExecutionModel {
   Interpret,
   JIT,
+  LLVM,
 }

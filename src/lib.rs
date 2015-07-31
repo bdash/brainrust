@@ -6,6 +6,7 @@ mod bytecode;
 mod executor;
 mod interpreter;
 mod jit;
+mod llvm;
 mod optimizer;
 mod parser;
 
@@ -15,3 +16,6 @@ extern crate libc;
 extern crate itertools;
 extern crate unreachable;
 extern crate vec_map;
+
+#[cfg(feature="llvm")]
+extern crate llvm as llvm_rs;

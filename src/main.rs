@@ -23,7 +23,10 @@ fn main() {
   {
     let mut ap = ArgumentParser::new();
     ap.set_description("A BrainFuck interpreter in Rust");
-    ap.refer(&mut execution_model).add_option(&["-i", "--interpret"], StoreConst(ExecutionModel::Interpret), "Use the interpreter");
+    ap.refer(&mut execution_model)
+      .add_option(&["-i", "--interpret"], StoreConst(ExecutionModel::Interpret), "Use the interpreter")
+      .add_option(&["-j", "--jit"], StoreConst(ExecutionModel::JIT), "Use the JIT")
+      .add_option(&["-l", "--llvm"], StoreConst(ExecutionModel::LLVM), "Use LLVM");
     ap.refer(&mut input_file_path).add_argument("script", Store, "BrainFuck script to execute.");
     ap.parse_args_or_exit();
   }

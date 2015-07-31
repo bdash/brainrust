@@ -3,9 +3,18 @@ name = "brainrust"
 version = "0.1.0"
 authors = ["Mark Rowe <mrowe@bdash.net.nz>"]
 
+[features]
+default = []
+
+llvm = ["llvm-alt"]
+
 [dependencies]
 argparse = "0.2.0"
 itertools = "0.3.21"
 libc = "0.1.8"
 unreachable = "0.0.2"
 vec_map = "0.0.1"
+
+[dependencies.llvm-alt]
+version = "*"
+optional = true
