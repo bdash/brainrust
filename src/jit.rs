@@ -162,7 +162,22 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
           Call(write_function_offset),
         ]));
       }
-      _ => { println!("{:?}", instruction); panic!() }
+      ByteCode::Input => {
+        body.extend(lower(&[
+          // Zero byte at tape head so that EOF will map to zero.
+          MovIM(RegisterSize::Int8, 0, tape_head, 0),
+          Push(tape_head),
+
+          // Read one byte into tape head.
+          MovIR(1, arguments[2]),
+          MovRR(tape_head, arguments[1]),
+          MovIR(0, arguments[0]),
+          MovIR(0x2000003, system_call_number),
+
+          Syscall,
+          Pop(tape_head),
+        ]));
+      }
     }
   }
 

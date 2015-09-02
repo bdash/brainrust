@@ -14,7 +14,7 @@ fn label(instruction: &ByteCode, index: usize) -> String {
       ByteCode::LoopStart { end } => format!("loop-start-{}", end),
       ByteCode::LoopEnd { start } => format!("loop-end-{}", start),
       ByteCode::Output => "output".to_string(),
-      _ => panic!(),
+      ByteCode::Input => "input".to_string(),
   })
 }
 
@@ -266,6 +266,8 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
   let entry = function.append("entry");
   builder.position_at_end(entry);
 
+  let getchar = module.add_function("getchar", Type::get::<fn() -> i32>(&context));
+
   let stack_frame = StackFrame::new(&module_helper);
   let helper = InstructionHelper::new(&module_helper, &stack_frame);
 
@@ -302,7 +304,12 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
         let result = builder.build_call(writer.buffered_write(), &[ stack_frame.output_buffer, size, value ]);
         builder.build_store(result, stack_frame.output_buffer_size);
       }
-      _ => panic!(),
+      ByteCode::Input => {
+        let result = builder.build_call(getchar, &[]);
+        let value = builder.build_trunc(result, Type::get::<u8>(&context));
+        let addr = helper.emit_address_of_value_at_tape_head(0);
+        builder.build_store(value, addr);
+      }
     }
     match instruction {
       ByteCode::LoopStart { .. } | ByteCode::LoopEnd { .. } => {},

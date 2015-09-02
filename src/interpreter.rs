@@ -1,7 +1,6 @@
 use super::bytecode::*;
 
-use std::io::{Write, stdout};
-use unreachable::unreachable;
+use std::io::{Read, Write, stdin, stdout};
 
 #[inline(never)]
 pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
@@ -50,7 +49,11 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
             output.clear();
           }
         }
-        _ => unreachable(),
+        ByteCode::Input => {
+          let mut input = [0u8; 1];
+          stdin().read(&mut input[..]).unwrap();
+          tape[tape_head] = input[0];
+        }
       }
       ip += 1
     }
