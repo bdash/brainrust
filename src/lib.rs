@@ -1,4 +1,4 @@
-#![feature(box_patterns, slice_patterns, convert)]
+#![feature(box_patterns, slice_patterns)]
 
 mod ast;
 mod assembler;

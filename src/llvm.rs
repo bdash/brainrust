@@ -43,9 +43,9 @@ impl<'a> ModuleHelper<'a> {
       self.module.add_function("llvm.memset.p0i8.i32", Type::get::<fn(*const i8, i8, i32, i32, bool)>(context))
     });
 
-    self.builder.build_call(memset, &[ address, value.compile(context), (count as i32).compile(context),
-                                         0i32.compile(context), false.compile(context)
-                                       ]);
+   self.builder.build_call(memset, &[ address, value.compile(context), (count as i32).compile(context),
+                                      0i32.compile(context), false.compile(context)
+                                    ]);
   }
 }
 
@@ -94,9 +94,9 @@ impl<'a> BufferedWriter<'a> {
 
     let expect = module.add_function("llvm.expect.i1", Type::get::<fn(bool, bool) -> bool>(context));
 
-    let buffered_write_type = Type::new_function(Type::get::<usize>(context),
+    let buffered_write_type = FunctionType::new(Type::get::<usize>(context),
       &[
-        Type::new_pointer(Type::new_array(Type::get::<i8>(context), OUTPUT_BUFFER_SIZE)),
+        PointerType::new(ArrayType::new(Type::get::<i8>(context), OUTPUT_BUFFER_SIZE)),
         Type::get::<usize>(context),
         Type::get::<i8>(context),
       ]);
@@ -142,9 +142,9 @@ impl<'a> BufferedWriter<'a> {
     let module = self.module();
     let builder = self.builder();
 
-    let function_type = Type::new_function(Type::get::<()>(context),
+    let function_type = FunctionType::new(Type::get::<()>(context),
       &[
-        Type::new_pointer(Type::new_array(Type::get::<i8>(context), OUTPUT_BUFFER_SIZE)),
+        PointerType::new(ArrayType::new(Type::get::<i8>(context), OUTPUT_BUFFER_SIZE)),
         Type::get::<usize>(context),
       ]);
     let function = module.add_function("flush_buffered_writes", function_type);
@@ -187,8 +187,8 @@ impl<'a> StackFrame<'a> {
     let context = module_helper.context;
     let builder = module_helper.builder;
 
-    let tape = builder.build_alloca(Type::new_array(Type::get::<u8>(context), TAPE_SIZE));
-    let output_buffer = builder.build_alloca(Type::new_array(Type::get::<u8>(context), OUTPUT_BUFFER_SIZE));
+    let tape = builder.build_alloca(ArrayType::new(Type::get::<u8>(context), TAPE_SIZE));
+    let output_buffer = builder.build_alloca(ArrayType::new(Type::get::<u8>(context), OUTPUT_BUFFER_SIZE));
     let tape_head = builder.build_alloca(Type::get::<usize>(context));
     let output_buffer_size = builder.build_alloca(Type::get::<usize>(context));
 
@@ -329,7 +329,6 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
 
   // FIXME: JITEngine doesn't appear to link the calls to external functions correctly.
   // They jump into unmapped memory.
-  // let ee = JitEngine::new(&module, JitOptions {opt_level: 0}).unwrap();
-  // let f: extern fn(i32) -> i32 = unsafe { ee.get_function(function) };
-  // f(0);
+  let ee = JitEngine::new(&module, JitOptions {opt_level: 3}).unwrap();
+  ee.run_function(function, &[ &0.to_generic(&context) ]);
 }

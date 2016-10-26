@@ -23,7 +23,7 @@ fn optimize_once(node: &Node) -> Node {
     MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) | Input | Output => node.clone(),
     Loop(box ref block) => {
       match block.children().as_slice() {
-        [ Subtract(1, 0) ] => Set(0, 0),
+        &[ Subtract(1, 0) ] => Set(0, 0),
         _ => Loop(Box::new(optimize_once(block))),
       }
     }

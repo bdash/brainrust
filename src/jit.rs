@@ -6,7 +6,7 @@ use std::mem;
 use std::ptr;
 
 use std::fs::OpenOptions;
-use std::io::{Result, Read, Write};
+use std::io::{Result, Write};
 use std::path::Path;
 
 use libc::{c_void, mmap, mprotect, munmap, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};

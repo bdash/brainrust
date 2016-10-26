@@ -16,5 +16,6 @@ unreachable = "0.0.2"
 vec_map = "0.0.1"
 
 [dependencies.llvm-alt]
-version = "*"
+git = "https://github.com/TomBebbington/llvm-rs.git"
+rev = "e12320221a4590d5c658306539b235b103651fda"
 optional = true

@@ -748,7 +748,7 @@ pub fn lower(instructions: &[MachineInstruction]) -> Vec<u8> {
 #[allow(dead_code)]
 fn show_representation(instructions: &[MachineInstruction]) {
   println!("{:?}", instructions);
-  println!("  {:}", lower(instructions).iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().connect(" "));
+  println!("  {:}", lower(instructions).iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().join(" "));
 }
 
 #[cfg(test)]

@@ -2,65 +2,70 @@
 name = "brainrust"
 version = "0.1.0"
 dependencies = [
- "argparse 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "itertools 0.3.22 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "llvm-alt 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "argparse 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "itertools 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
+ "llvm-alt 0.5.0 (git+https://github.com/TomBebbington/llvm-rs.git?rev=e12320221a4590d5c658306539b235b103651fda)",
  "unreachable 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "vec_map 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "argparse"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "bitflags"
-version = "0.3.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "cbox"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.17 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
-name = "glob"
-version = "0.2.10"
+name = "gcc"
+version = "0.3.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "itertools"
-version = "0.3.22"
+version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libc"
-version = "0.1.8"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "libc"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "llvm-alt"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+version = "0.5.0"
+source = "git+https://github.com/TomBebbington/llvm-rs.git?rev=e12320221a4590d5c658306539b235b103651fda#e12320221a4590d5c658306539b235b103651fda"
 dependencies = [
- "cbox 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "llvm-alt-sys 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cbox 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
+ "llvm-sys 0.3.0 (git+https://github.com/TomBebbington/llvm-sys.rs)",
 ]
 
 [[package]]
-name = "llvm-alt-sys"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+name = "llvm-sys"
+version = "0.3.0"
+source = "git+https://github.com/TomBebbington/llvm-sys.rs#88a4f2da362f5162d28d8fd60503733476040db6"
 dependencies = [
- "bitflags 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "glob 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bitflags 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.3.38 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -74,7 +79,7 @@ name = "unreachable"
 version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "void 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "void 0.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -84,6 +89,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "void"
-version = "0.0.4"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
+[metadata]
+"checksum argparse 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "37bb99f5e39ee8b23b6e227f5b8f024207e8616f44aa4b8c76ecd828011667ef"
+"checksum bitflags 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "4f67931368edf3a9a51d29886d245f1c3db2f1ef0dcc9e35ff70341b78c10d23"
+"checksum cbox 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e4198143b96d30e1758ebe0abab558e0845f09b36d83872d88db34911349321f"
+"checksum gcc 0.3.38 (registry+https://github.com/rust-lang/crates.io-index)" = "553f11439bdefe755bf366b264820f1da70f3aaf3924e594b886beb9c831bcf5"
+"checksum itertools 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)" = "16b73f1c685cfd8ff8d75698ed87e6188cd09944b30c0863d45c2c3699d1da0c"
+"checksum libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e32a70cf75e5846d53a673923498228bbec6a8624708a9ea5645f075d6276122"
+"checksum libc 0.2.17 (registry+https://github.com/rust-lang/crates.io-index)" = "044d1360593a78f5c8e5e710beccdc24ab71d1f01bc19a29bcacdba22e8475d8"
+"checksum llvm-alt 0.5.0 (git+https://github.com/TomBebbington/llvm-rs.git?rev=e12320221a4590d5c658306539b235b103651fda)" = "<none>"
+"checksum llvm-sys 0.3.0 (git+https://github.com/TomBebbington/llvm-sys.rs)" = "<none>"
+"checksum semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)" = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
+"checksum unreachable 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "87ee3a91b4169cdd888cf20a0782d6369ba1200d03de3e61323e7037cd9465a7"
+"checksum vec_map 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c1bb124acecc79b9a7efcb36a6ab469a203f2121f0bf44c36dc2c3e66581dadd"
+"checksum void 0.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "c6b6cda9ed9afc732c2cd0a818e43881f46e364715a5c2947b111e97cf17800a"
