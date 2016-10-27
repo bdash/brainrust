@@ -6,6 +6,7 @@ dependencies = [
  "itertools 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "llvm-alt 0.5.0 (git+https://github.com/TomBebbington/llvm-rs.git?rev=e12320221a4590d5c658306539b235b103651fda)",
+ "syscall 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "unreachable 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "vec_map 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -75,6 +76,11 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "syscall"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "unreachable"
 version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -103,6 +109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum llvm-alt 0.5.0 (git+https://github.com/TomBebbington/llvm-rs.git?rev=e12320221a4590d5c658306539b235b103651fda)" = "<none>"
 "checksum llvm-sys 0.3.0 (git+https://github.com/TomBebbington/llvm-sys.rs)" = "<none>"
 "checksum semver 0.1.20 (registry+https://github.com/rust-lang/crates.io-index)" = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
+"checksum syscall 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dae2c4de039bf338dd96f46621f20222c4101045dac5403b46f472608cb5b556"
 "checksum unreachable 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "87ee3a91b4169cdd888cf20a0782d6369ba1200d03de3e61323e7037cd9465a7"
 "checksum vec_map 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c1bb124acecc79b9a7efcb36a6ab469a203f2121f0bf44c36dc2c3e66581dadd"
 "checksum void 0.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "c6b6cda9ed9afc732c2cd0a818e43881f46e364715a5c2947b111e97cf17800a"

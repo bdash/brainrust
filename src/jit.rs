@@ -11,6 +11,7 @@ use std::path::Path;
 
 use libc::{c_void, mmap, mprotect, munmap, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_PRIVATE};
 use vec_map::VecMap;
+use syscall;
 
 pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
   let machine_code = compile_to_machinecode(instructions);
@@ -69,7 +70,7 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
       // Write output buffer to stdout
       MovRR(output_buffer_head, arguments[1]),
       MovIR(1, arguments[0]),
-      MovIR(0x2000004, system_call_number),
+      MovIR(syscall::nr::WRITE as u64, system_call_number),
       Syscall,
 
       // Reset the output buffer tail to the start.
@@ -172,7 +173,7 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
           MovIR(1, arguments[2]),
           MovRR(tape_head, arguments[1]),
           MovIR(0, arguments[0]),
-          MovIR(0x2000003, system_call_number),
+          MovIR(syscall::nr::READ as u64, system_call_number),
 
           Syscall,
           Pop(tape_head),
@@ -193,7 +194,7 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
     // Write output buffer to stdout
     MovRR(output_buffer_head, arguments[1]),
     MovIR(1, arguments[0]),
-    MovIR(0x2000004, system_call_number),
+    MovIR(syscall::nr::WRITE as u64, system_call_number),
     Syscall,
 
     XorRR(Register::RAX, Register::RAX),

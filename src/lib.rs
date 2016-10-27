@@ -16,6 +16,7 @@ extern crate libc;
 extern crate itertools;
 extern crate unreachable;
 extern crate vec_map;
+extern crate syscall;
 
 #[cfg(feature="llvm")]
 extern crate llvm as llvm_rs;
