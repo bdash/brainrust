@@ -3,7 +3,7 @@ use super::bytecode::*;
 use std::io::{Read, Write, stdin, stdout};
 
 #[inline(never)]
-pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
+pub fn execute_bytecode(instructions: &[ByteCode]) {
   unsafe {
     let mut output = Vec::with_capacity(256);
     let mut tape = vec![0u8; 1024];
@@ -57,7 +57,7 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
       }
       ip += 1
     }
-    if output.len() > 0 {
+    if !output.is_empty() {
       stdout().write(&output[..]).unwrap();
     }
   }

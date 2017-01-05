@@ -506,14 +506,14 @@ impl MachineCode {
 
   fn emit_u16_constant(&mut self, constant: u32) {
     assert!(constant <= std::u16::MAX as u32);
-    self.buffer.extend(&[
+    self.buffer.extend_from_slice(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
     ]);
   }
 
   fn emit_u32_constant(&mut self, constant: u32) {
-    self.buffer.extend(&[
+    self.buffer.extend_from_slice(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
       ((constant >> 16) & 0xff) as u8,
@@ -522,7 +522,7 @@ impl MachineCode {
   }
 
   fn emit_u64_constant(&mut self, constant: u64) {
-    self.buffer.extend(&[
+    self.buffer.extend_from_slice(&[
       ((constant >>  0) & 0xff) as u8,
       ((constant >>  8) & 0xff) as u8,
       ((constant >> 16) & 0xff) as u8,

@@ -22,8 +22,8 @@ fn optimize_once(node: &Node) -> Node {
   match *node {
     MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) | Input | Output => node.clone(),
     Loop(box ref block) => {
-      match block.children().as_slice() {
-        &[ Subtract(1, 0) ] => Set(0, 0),
+      match *block.children().as_slice() {
+        [ Subtract(1, 0) ] => Set(0, 0),
         _ => Loop(Box::new(optimize_once(block))),
       }
     }
@@ -70,38 +70,37 @@ impl Mutation {
   }
 }
 
-fn simplify_mutation_sequences(children: &Vec<Node>) -> Vec<Node> {
+fn simplify_mutation_sequences(children: &[Node]) -> Vec<Node> {
   use super::ast::Node::*;
 
   children.iter().group_by(|&node| node.is_mutation()).flat_map(|(key, group)| {
-    match key {
-      true => {
-        let (index, mutations) = evaluate_mutations(&group);
+    if !key {
+      group.into_iter().cloned().collect()
+    } else {
+      let (index, mutations) = evaluate_mutations(&group);
 
-        let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
-        modified_offsets.sort();
+      let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
+      modified_offsets.sort();
 
-        modified_offsets.iter().flat_map(|offset| {
-          let value = mutations[*offset];
-          match value {
-            Mutation::Subtract(value) => Some(Subtract(value as u8, **offset)),
-            Mutation::Add(value) => Some(Add(value as u8, **offset)),
-            Mutation::Set(value) => Some(Set(value as u8, **offset))
-          }
-        }).chain(
-          match index.signum() {
-             1 => Some(MoveRight(index as usize)),
-            -1 => Some(MoveLeft(index.abs() as usize)),
-             _ => None
-          }
-        ).collect::<Vec<_>>()
-      }
-      false => group.iter().map(|&node| node.clone()).collect()
+      modified_offsets.iter().flat_map(|offset| {
+        let value = mutations[*offset];
+        match value {
+          Mutation::Subtract(value) => Some(Subtract(value as u8, **offset)),
+          Mutation::Add(value) => Some(Add(value as u8, **offset)),
+          Mutation::Set(value) => Some(Set(value as u8, **offset))
+        }
+      }).chain(
+        match index.signum() {
+           1 => Some(MoveRight(index as usize)),
+          -1 => Some(MoveLeft(index.abs() as usize)),
+           _ => None
+        }
+      ).collect::<Vec<_>>()
     }
   }).collect()
 }
 
-fn evaluate_mutations(nodes: &Vec<&Node>) -> (i32, HashMap<i32, Mutation>) {
+fn evaluate_mutations(nodes: &[&Node]) -> (i32, HashMap<i32, Mutation>) {
   use super::ast::Node::*;
 
   let mut mutations = HashMap::new();

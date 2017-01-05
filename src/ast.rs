@@ -39,7 +39,7 @@ impl Node {
     }
 
     assert_eq!(nodes.len(), 1);
-    return Node::Block(nodes.pop().unwrap());
+    Node::Block(nodes.pop().unwrap())
   }
 
   pub fn children(&self) -> Vec<Node> {

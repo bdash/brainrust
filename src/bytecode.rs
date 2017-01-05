@@ -17,23 +17,23 @@ impl ByteCode {
   fn from_ast_at_offset(node: &Node, offset: usize) -> Vec<ByteCode> {
     use super::ast::Node::*;
 
-    let code = match node {
-      &MoveLeft(amount) => Some(ByteCode::MoveLeft(amount)),
-      &MoveRight(amount) => Some(ByteCode::MoveRight(amount)),
-      &Add(amount, offset) => Some(ByteCode::Add(amount, offset)),
-      &Subtract(amount, offset) => Some(ByteCode::Subtract(amount, offset)),
-      &Set(value, offset) => Some(ByteCode::Set(value, offset)),
-      &Output => Some(ByteCode::Output),
-      &Input => Some(ByteCode::Input),
-      &Loop(..) | &Node::Block(..) => None,
+    let code = match *node {
+      MoveLeft(amount) => Some(ByteCode::MoveLeft(amount)),
+      MoveRight(amount) => Some(ByteCode::MoveRight(amount)),
+      Add(amount, offset) => Some(ByteCode::Add(amount, offset)),
+      Subtract(amount, offset) => Some(ByteCode::Subtract(amount, offset)),
+      Set(value, offset) => Some(ByteCode::Set(value, offset)),
+      Output => Some(ByteCode::Output),
+      Input => Some(ByteCode::Input),
+      Loop(..) | Node::Block(..) => None,
     };
 
     if let Some(code) = code {
       return vec![ code ]
     }
 
-    match node {
-      &Loop(box ref block) => {
+    match *node {
+      Loop(box ref block) => {
         let block_bytecode = Self::from_ast_at_offset(block, offset + 1);
         let start = ByteCode::LoopStart { end: offset + block_bytecode.len() + 1};
         let end = ByteCode::LoopEnd { start: offset };
@@ -43,7 +43,7 @@ impl ByteCode {
         result.push(end);
         result
       }
-      &Block(ref children) => {
+      Block(ref children) => {
         let mut bytecode = Vec::new();
         for node in children {
           let current_offset = bytecode.len() + offset;

@@ -13,13 +13,13 @@ use libc::{c_void, mmap, mprotect, munmap, PROT_EXEC, PROT_WRITE, MAP_ANON, MAP_
 use vec_map::VecMap;
 use syscall;
 
-pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
+pub fn execute_bytecode(instructions: &[ByteCode]) {
   let machine_code = compile_to_machinecode(instructions);
   unsafe { execute_machinecode(&machine_code) };
 }
 
 #[inline(never)]
-fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
+fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
   use super::assembler::x86_64::MachineInstruction::*;
 
   let arguments = &[Register::RDI, Register::RSI, Register::RDX];
@@ -129,7 +129,7 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
           MovIM(RegisterSize::Int8, value as u32, tape_head, offset)
         ]));
       }
-      ByteCode::LoopStart { end: _ } => {
+      ByteCode::LoopStart { .. } => {
         body.extend(lower(&[
           CmpIM(RegisterSize::Int8, 0, tape_head, 0),
           // Large placeholder address to force 32-bit displacement on the jump.
@@ -208,8 +208,8 @@ fn compile_to_machinecode(instructions: &Vec<ByteCode>) -> Vec<u8> {
   prologue.into_iter().chain(body).chain(epilogue).collect::<Vec<u8>>()
 }
 
-unsafe fn execute_machinecode(machine_code: &Vec<u8>) {
-  write_to_file("out.dat", &machine_code).unwrap();
+unsafe fn execute_machinecode(machine_code: &[u8]) {
+  write_to_file("out.dat", machine_code).unwrap();
 
   let map = MemoryMap::new(machine_code.len(), PROT_WRITE);
   ptr::copy(machine_code.as_ptr(), map.buffer as *mut u8, machine_code.len());
@@ -224,7 +224,7 @@ unsafe fn execute_machinecode(machine_code: &Vec<u8>) {
   function(tape.as_mut_ptr(), output_buffer.as_mut_ptr());
 }
 
-fn write_to_file(file_path: &str, buffer: &Vec<u8>) -> Result<()> {
+fn write_to_file(file_path: &str, buffer: &[u8]) -> Result<()> {
   let mut file = try!(OpenOptions::new().write(true).create(true).truncate(true).open(&Path::new(file_path)));
   try!(file.write_all(&buffer[..]));
   Ok(())
