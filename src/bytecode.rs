@@ -3,11 +3,9 @@ use std::fmt;
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum ByteCode {
-  MoveLeft(usize),
-  MoveRight(usize),
-  Add(u8, i32),
-  Subtract(u8, i32),
-  Set(u8, i32),
+  Move(isize),
+  Add{ amount: i8, offset: i32 },
+  Set{ value: u8, offset: i32 },
   Output,
   Input,
   LoopStart { end: usize },
@@ -19,11 +17,9 @@ impl fmt::Debug for ByteCode {
     use self::ByteCode::*;
 
     match *self {
-      MoveLeft(amount) => write!(f, "MoveLeft({})", amount),
-      MoveRight(amount) => write!(f, "MoveRight({})", amount),
-      Add(amount, offset) => write!(f, "Add({}, {})", amount, offset),
-      Subtract(amount, offset) => write!(f, "Subtract({}, {})", amount, offset),
-      Set(amount, offset) => write!(f, "Set({}, {})", amount, offset),
+      Move(amount) => write!(f, "Move({})", amount),
+      Add{ amount, offset } => write!(f, "Add{{ amount: {}, offset: {} }}", amount, offset),
+      Set{ value, offset } => write!(f, "Set{{ value: {}, offset: {} }}", value, offset),
       Output => write!(f, "Output"),
       Input => write!(f, "Input"),
       LoopStart { end } => write!(f, "LoopStart{{ end: {} }}", end),
@@ -37,11 +33,9 @@ impl ByteCode {
     use super::ast::Node::*;
 
     let code = match *node {
-      MoveLeft(amount) => Some(ByteCode::MoveLeft(amount)),
-      MoveRight(amount) => Some(ByteCode::MoveRight(amount)),
-      Add(amount, offset) => Some(ByteCode::Add(amount, offset)),
-      Subtract(amount, offset) => Some(ByteCode::Subtract(amount, offset)),
-      Set(value, offset) => Some(ByteCode::Set(value, offset)),
+      Move(amount) => Some(ByteCode::Move(amount)),
+      Add{ amount, offset } => Some(ByteCode::Add{ amount, offset }),
+      Set{ value, offset } => Some(ByteCode::Set{ value, offset }),
       Output => Some(ByteCode::Output),
       Input => Some(ByteCode::Input),
       Loop(..) | Node::Block(..) => None,

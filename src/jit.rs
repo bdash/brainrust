@@ -98,16 +98,16 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
   for (i, &instruction) in instructions.iter().enumerate() {
 
     match instruction {
-      ByteCode::MoveLeft(amount) => {
+      ByteCode::Move(amount) if amount < 0 => {
         body.extend(lower(&[
           if amount == 1 {
             DecR(tape_head)
           } else {
-            SubIR(amount as u32, tape_head)
+            SubIR(-amount as u32, tape_head)
           }
         ]));
       }
-      ByteCode::MoveRight(amount) => {
+      ByteCode::Move(amount) => {
         body.extend(lower(&[
           if amount == 1 {
             IncR(tape_head)
@@ -116,7 +116,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
           }
         ]));
       }
-      ByteCode::Add(amount, offset) => {
+      ByteCode::Add{ amount, offset } if amount > 0 => {
         body.extend(lower(&[
           if amount == 1 {
             IncM(RegisterSize::Int8, tape_head, offset)
@@ -125,16 +125,16 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
           }
         ]));
       }
-      ByteCode::Subtract(amount, offset) => {
+      ByteCode::Add { amount, offset } => {
         body.extend(lower(&[
           if amount == 1 {
             DecM(RegisterSize::Int8, tape_head, offset)
           } else {
-            SubIM(RegisterSize::Int8, amount as u32, tape_head, offset)
+            SubIM(RegisterSize::Int8, -amount as u32, tape_head, offset)
           }
         ]));
       }
-      ByteCode::Set(value, offset) => {
+      ByteCode::Set{ value, offset } => {
         body.extend(lower(&[
           MovIM(RegisterSize::Int8, value as u32, tape_head, offset)
         ]));

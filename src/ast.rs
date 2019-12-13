@@ -4,11 +4,9 @@ use std::fmt;
 #[derive(PartialEq, Clone)]
 pub enum Node {
   Block(Vec<Node>),
-  MoveLeft(usize),
-  MoveRight(usize),
-  Add(u8, i32),
-  Subtract(u8, i32),
-  Set(u8, i32),
+  Move(isize),
+  Add{ amount: i8, offset: i32 },
+  Set{ value: u8, offset: i32 },
   Output,
   Input,
   Loop(Box<Node>),
@@ -20,11 +18,9 @@ impl fmt::Debug for Node {
 
     match *self {
       Block(ref nodes) => write!(f, "{:#?}", nodes),
-      MoveLeft(amount) => write!(f, "MoveLeft({})", amount),
-      MoveRight(amount) => write!(f, "MoveRight({})", amount),
-      Add(amount, offset) => write!(f, "Add({}, {})", amount, offset),
-      Subtract(amount, offset) => write!(f, "Subtract({}, {})", amount, offset),
-      Set(amount, offset) => write!(f, "Set({}, {})", amount, offset),
+      Move(amount) => write!(f, "Move({})", amount),
+      Add{ amount, offset } => write!(f, "Add{{ amount: {}, offset: {} }}", amount, offset),
+      Set{ value, offset } => write!(f, "Set{{ value: {}, offset: {} }}", value, offset),
       Output => write!(f, "Output"),
       Input => write!(f, "Input"),
       Loop(ref nodes) => write!(f, "Loop({:#?})", nodes),
@@ -40,10 +36,10 @@ impl Node {
 
     for token in tokens {
       let node = match token {
-        MoveLeft => Some(Node::MoveLeft(1)),
-        MoveRight => Some(Node::MoveRight(1)),
-        Add => Some(Node::Add(1, 0)),
-        Subtract => Some(Node::Subtract(1, 0)),
+        MoveLeft => Some(Node::Move(-1)),
+        MoveRight => Some(Node::Move(1)),
+        Add => Some(Node::Add{ amount: 1, offset: 0 }),
+        Subtract => Some(Node::Add{ amount: -1, offset: 0 }),
         Output => Some(Node::Output),
         Input => Some(Node::Input),
         LoopStart => {
@@ -72,7 +68,7 @@ impl Node {
     use self::Node::*;
 
     match *self {
-      MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) => true,
+      Move(..) | Add{..} | Set{..} => true,
       _ => false,
     }
   }

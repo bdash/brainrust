@@ -20,10 +20,10 @@ fn optimize_once(node: &Node) -> Node {
   use super::ast::Node::*;
 
   match *node {
-    MoveLeft(..) | MoveRight(..) | Add(..) | Subtract(..) | Set(..) | Input | Output => node.clone(),
+    Move(..) | Add{..} | Set{..} | Input | Output => node.clone(),
     Loop(box ref block) => {
       match *block.children().as_slice() {
-        [ Subtract(1, 0) ] => Set(0, 0),
+        [ Add{ amount: -1, offset: 0 } ] => Set{ value: 0, offset: 0 },
         _ => Loop(Box::new(optimize_once(block))),
       }
     }
@@ -38,7 +38,6 @@ fn optimize_once(node: &Node) -> Node {
 #[derive(Copy, Clone, Debug)]
 enum Mutation {
   Add(i8),
-  Subtract(i8),
   Set(i8),
 }
 
@@ -49,23 +48,7 @@ impl Mutation {
     *self = match (*self, other) {
       (_,           Set(_))           => other,
       (Set(base),   Add(amount))      => Set(base + amount),
-      (Set(base),   Subtract(amount)) => Set(base - amount),
       (Add(a),      Add(b))           => Add(a + b),
-      (Subtract(a), Subtract(b))      => Subtract(a + b),
-      (Add(a),      Subtract(b))      => {
-        match (a - b).signum() {
-          1 | 0 => Add(a - b),
-          -1 => Subtract(b - a),
-          _ => unreachable!(),
-        }
-      }
-      (Subtract(a), Add(b)) => {
-        match (b - a).signum() {
-          1 | 0 => Add(a - b),
-          -1 => Subtract(b - a),
-          _ => unreachable!(),
-        }
-      }
     }
   }
 }
@@ -86,16 +69,11 @@ fn simplify_mutation_sequences(children: &[Node]) -> Vec<Node> {
       modified_offsets.iter().flat_map(|offset| {
         let value = mutations[*offset];
         match value {
-          Mutation::Subtract(value) => Some(Subtract(value as u8, **offset)),
-          Mutation::Add(value) => Some(Add(value as u8, **offset)),
-          Mutation::Set(value) => Some(Set(value as u8, **offset))
+          Mutation::Add(value) => Some(Add{ amount: value, offset: **offset }),
+          Mutation::Set(value) => Some(Set{ value: value as u8, offset: **offset })
         }
       }).chain(
-        match index.signum() {
-           1 => Some(MoveRight(index as usize)),
-          -1 => Some(MoveLeft(index.abs() as usize)),
-           _ => None
-        }
+        if index == 0 { None } else { Some(Move(index as isize)) }
       ).collect::<Vec<_>>()
     }
   }).collect()
@@ -109,21 +87,12 @@ fn evaluate_mutations(nodes: &[&Node]) -> (i32, HashMap<i32, Mutation>) {
 
   for node in nodes {
     match **node {
-      MoveLeft(amount) => {
-        index -= amount as i32;
-      }
-      MoveRight(amount) => {
-        index += amount as i32;
-      }
-      Add(amount, offset) => {
+      Move(amount) => index += amount as i32,
+      Add{ amount, offset } => {
         let value = mutations.entry(index + offset).or_insert(Mutation::Add(0));
-        value.combine(Mutation::Add(amount as i8));
+        value.combine(Mutation::Add(amount));
       }
-      Subtract(amount, offset) => {
-        let value = mutations.entry(index + offset).or_insert(Mutation::Add(0));
-        value.combine(Mutation::Subtract(amount as i8));
-      }
-      Set(amount, offset) => {
+      Set{ value: amount, offset } => {
         let value = mutations.entry(index + offset).or_insert(Mutation::Set(0));
         value.combine(Mutation::Set(amount as i8));
       }

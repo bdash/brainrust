@@ -7,24 +7,24 @@ pub fn execute_bytecode(instructions: &[ByteCode]) {
   unsafe {
     let mut output = Vec::with_capacity(256);
     let mut tape = vec![0u8; 1024];
-    let mut tape_head = 0;
+    let mut tape_head: usize = 0;
     let mut ip = 0;
     while ip < instructions.len() {
       let instruction = instructions.get_unchecked(ip);
 
       match *instruction {
-        ByteCode::MoveLeft(amount) => tape_head -= amount,
-        ByteCode::MoveRight(amount) => tape_head += amount,
+        ByteCode::Move(amount) if amount >= 0 => tape_head += amount as usize,
+        ByteCode::Move(amount) => tape_head -= -amount as usize,
 
-        ByteCode::Add(amount, offset) => {
+        ByteCode::Add{ amount, offset } => {
           let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
-          *value = value.wrapping_add(amount);
+          if amount > 0 {
+            *value = value.wrapping_add(amount as u8);
+          } else {
+            *value = value.wrapping_sub((-amount) as u8);
+          }
         }
-        ByteCode::Subtract(amount, offset) => {
-          let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
-          *value = value.wrapping_sub(amount);
-        }
-        ByteCode::Set(constant, offset) => {
+        ByteCode::Set{ value: constant, offset } => {
           let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
           *value = constant;
         }
