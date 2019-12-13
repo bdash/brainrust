@@ -18,6 +18,16 @@ pub fn execute_bytecode(instructions: &[ByteCode]) {
   unsafe { execute_machinecode(&machine_code) };
 }
 
+#[cfg(all(target_os="macos", target_arch="x86_64"))]
+fn syscall_number(n: usize) -> u64 {
+  (n | 0x2000000) as u64
+}
+
+#[cfg(all(target_os="linux", target_arch="x86_64"))]
+fn syscall_number(n: usize) -> u64 {
+  n as u64
+}
+
 #[inline(never)]
 fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
   use super::assembler::x86_64::MachineInstruction::*;
@@ -70,7 +80,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
       // Write output buffer to stdout
       MovRR(output_buffer_head, arguments[1]),
       MovIR(1, arguments[0]),
-      MovIR(syscall::nr::WRITE as u64, system_call_number),
+      MovIR(syscall_number(syscall::nr::WRITE), system_call_number),
       Syscall,
 
       // Reset the output buffer tail to the start.
@@ -173,7 +183,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
           MovIR(1, arguments[2]),
           MovRR(tape_head, arguments[1]),
           MovIR(0, arguments[0]),
-          MovIR(syscall::nr::READ as u64, system_call_number),
+          MovIR(syscall_number(syscall::nr::READ) as u64, system_call_number),
 
           Syscall,
           Pop(tape_head),
@@ -194,7 +204,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
     // Write output buffer to stdout
     MovRR(output_buffer_head, arguments[1]),
     MovIR(1, arguments[0]),
-    MovIR(syscall::nr::WRITE as u64, system_call_number),
+    MovIR(syscall_number(syscall::nr::WRITE), system_call_number),
     Syscall,
 
     XorRR(Register::RAX, Register::RAX),
