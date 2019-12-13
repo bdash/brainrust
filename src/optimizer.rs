@@ -73,11 +73,12 @@ impl Mutation {
 fn simplify_mutation_sequences(children: &[Node]) -> Vec<Node> {
   use super::ast::Node::*;
 
-  children.iter().group_by(|&node| node.is_mutation()).flat_map(|(key, group)| {
+  children.iter().group_by(|&node| node.is_mutation()).into_iter().flat_map(|(key, group)| {
     if !key {
-      group.into_iter().cloned().collect()
+      group.cloned().collect()
     } else {
-      let (index, mutations) = evaluate_mutations(&group);
+      let group_nodes: Vec<_> = group.collect();
+      let (index, mutations) = evaluate_mutations(&group_nodes);
 
       let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
       modified_offsets.sort();

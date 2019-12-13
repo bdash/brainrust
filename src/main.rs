@@ -10,9 +10,9 @@ use brainrust::{Executor, ExecutionModel};
 
 #[cfg_attr(test, allow(dead_code))]
 fn load_file(input_file_path: &str) -> Result<Vec<u8>> {
-  let mut file = try!(File::open(&Path::new(input_file_path)));
+  let mut file = File::open(&Path::new(input_file_path))?;
   let mut contents: Vec<u8> = Vec::new();
-  try!(file.read_to_end(&mut contents));
+  file.read_to_end(&mut contents)?;
   Ok(contents)
 }
 

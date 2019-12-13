@@ -225,20 +225,20 @@ unsafe fn execute_machinecode(machine_code: &[u8]) {
 }
 
 fn write_to_file(file_path: &str, buffer: &[u8]) -> Result<()> {
-  let mut file = try!(OpenOptions::new().write(true).create(true).truncate(true).open(&Path::new(file_path)));
-  try!(file.write_all(&buffer[..]));
+  let mut file = OpenOptions::new().write(true).create(true).truncate(true).open(&Path::new(file_path))?;
+  file.write_all(&buffer[..])?;
   Ok(())
 }
 
 struct MemoryMap {
-  size: u64,
+  size: usize,
   buffer: *mut c_void,
 }
 
 impl MemoryMap {
   unsafe fn new(size: usize, protection: i32) -> MemoryMap {
-    let buffer = mmap(ptr::null::<u8>() as *mut c_void, size as u64, protection, MAP_ANON | MAP_PRIVATE, 0, 0);
-    MemoryMap { size: size as u64, buffer: buffer }
+    let buffer = mmap(ptr::null::<u8>() as *mut c_void, size, protection, MAP_ANON | MAP_PRIVATE, 0, 0);
+    MemoryMap { size, buffer }
   }
 
   unsafe fn reprotect(&self, protection: i32) {

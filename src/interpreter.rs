@@ -45,20 +45,20 @@ pub fn execute_bytecode(instructions: &[ByteCode]) {
           let c = *tape.get_unchecked(tape_head);
           output.push(c);
           if c as char == '\n' {
-            stdout().write(&output[..]).unwrap();
+            stdout().write_all(&output[..]).unwrap();
             output.clear();
           }
         }
         ByteCode::Input => {
           let mut input = [0u8; 1];
-          stdin().read(&mut input[..]).unwrap();
+          stdin().read_exact(&mut input[..]).unwrap();
           tape[tape_head] = input[0];
         }
       }
       ip += 1
     }
     if !output.is_empty() {
-      stdout().write(&output[..]).unwrap();
+      stdout().write_all(&output[..]).unwrap();
     }
   }
 }

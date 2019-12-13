@@ -29,8 +29,8 @@ pub enum RegisterSize {
 }
 
 impl RegisterSize {
-  fn bits(&self) -> u8 {
-    *self as u8
+  fn bits(self) -> u8 {
+    self as u8
   }
 }
 
@@ -97,9 +97,9 @@ pub enum Register {
 }
 
 impl Register {
-  fn size(&self) -> RegisterSize {
+  fn size(self) -> RegisterSize {
     use self::Register::*;
-    match *self {
+    match self {
       RAX | RCX | RDX | RBX | RSP | RBP | RSI | RDI => RegisterSize::Int64,
       R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => RegisterSize::Int64,
       EAX | EBX | ESP | EBP => RegisterSize::Int32,
@@ -111,17 +111,17 @@ impl Register {
     }
   }
 
-  fn is_64_bit(&self) -> bool {
+  fn is_64_bit(self) -> bool {
     self.size() == RegisterSize::Int64
   }
 
-  fn is_16_bit(&self) -> bool {
+  fn is_16_bit(self) -> bool {
     self.size() == RegisterSize::Int16
   }
 
-  fn number(&self) -> u8 {
+  fn number(self) -> u8 {
     use self::Register::*;
-    let number = match *self {
+    let number = match self {
       RAX => RegisterNumber::RAX,
       RCX => RegisterNumber::RCX,
       RDX => RegisterNumber::RDX,
@@ -183,7 +183,7 @@ impl Register {
     number as u8
   }
 
-  fn is_extended_register(&self) -> bool {
+  fn is_extended_register(self) -> bool {
     self.number() >= (RegisterNumber::R8 as u8)
   }
 }
@@ -560,10 +560,10 @@ enum ModRM {
 }
 
 impl ModRM {
-  fn encode(&self) -> u8 {
+  fn encode(self) -> u8 {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       Register(register) => 0b11000000 | (register.number() & 0x7),
       TwoRegisters(source, dest) => 0b11000000 | (source.number() & 0x7) << 3 | (dest.number() & 0x7),
       Memory(_, dest) => 0x0 | (dest.number() & 0x7),
@@ -583,15 +583,15 @@ impl ModRM {
     }
   }
 
-  fn emit(&self, machine_code: &mut MachineCode, group_opcode: Option<u8>) {
+  fn emit(self, machine_code: &mut MachineCode, group_opcode: Option<u8>) {
     machine_code.push(self.encode() | (group_opcode.unwrap_or(0) << 3));
     self.emit_offset_if_needed(machine_code);
   }
 
-  fn emit_offset_if_needed(&self, machine_code: &mut MachineCode) {
+  fn emit_offset_if_needed(self, machine_code: &mut MachineCode) {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       Memory8BitDisplacement(_, _, offset) | MemoryTwoRegisters8BitDisplacement(_, _, offset) => {
         machine_code.emit_i8_constant(offset as i32)
       }
@@ -602,10 +602,10 @@ impl ModRM {
     }
   }
 
-  fn needs_rex(&self) -> bool {
+  fn needs_rex(self) -> bool {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       MemoryTwoRegisters(source, _) | MemoryTwoRegisters8BitDisplacement(source, _, _) |
       MemoryTwoRegisters32BitDisplacement(source, _, _) => {
         source.is_64_bit() || source.is_extended_register()
@@ -616,10 +616,10 @@ impl ModRM {
     }
   }
 
-  fn needs_operand_size_override(&self) -> bool {
+  fn needs_operand_size_override(self) -> bool {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       TwoRegisters(source, dest) => {
         assert!(source.is_16_bit() == dest.is_16_bit());
         source.is_16_bit()
@@ -638,10 +638,10 @@ impl ModRM {
     }
   }
 
-  fn needs_address_size_override(&self) -> bool {
+  fn needs_address_size_override(self) -> bool {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       Memory(_, register) | Memory8BitDisplacement(_, register, _) | Memory32BitDisplacement(_, register, _) => {
         register.size() != RegisterSize::Int64
       }
@@ -649,13 +649,13 @@ impl ModRM {
     }
   }
 
-  fn emit_prefixes_if_needed(&self, machine_code: &mut MachineCode) {
+  fn emit_prefixes_if_needed(self, machine_code: &mut MachineCode) {
     self.emit_operand_size_override_if_needed(machine_code);
     self.emit_address_size_override_if_needed(machine_code);
     self.emit_rex_if_needed(machine_code);
   }
 
-  fn emit_rex_if_needed(&self, machine_code: &mut MachineCode) {
+  fn emit_rex_if_needed(self, machine_code: &mut MachineCode) {
     use self::ModRM::*;
 
     if !self.needs_rex() {
@@ -663,7 +663,7 @@ impl ModRM {
     }
 
     let rex_marker = 0b01000000;
-    match *self {
+    match self {
       TwoRegisters(source, dest) | MemoryTwoRegisters(source, dest) | MemoryTwoRegisters8BitDisplacement(source, dest, _) |
       MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         let mut rex = rex_marker;
@@ -682,7 +682,7 @@ impl ModRM {
     }
   }
 
-  fn emit_operand_size_override_if_needed(&self, machine_code: &mut MachineCode) {
+  fn emit_operand_size_override_if_needed(self, machine_code: &mut MachineCode) {
     if !self.needs_operand_size_override() {
       return
     }
@@ -690,7 +690,7 @@ impl ModRM {
     machine_code.push(0x66);
   }
 
-  fn emit_address_size_override_if_needed(&self, machine_code: &mut MachineCode) {
+  fn emit_address_size_override_if_needed(self, machine_code: &mut MachineCode) {
     if !self.needs_address_size_override() {
       return
     }
@@ -698,10 +698,10 @@ impl ModRM {
     machine_code.push(0x67);
   }
 
-  fn is_64_bit(&self) -> bool {
+  fn is_64_bit(self) -> bool {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       TwoRegisters(source, dest) => {
         assert!(source.is_64_bit() == dest.is_64_bit());
         source.is_64_bit()
@@ -720,10 +720,10 @@ impl ModRM {
     }
   }
 
-  fn has_extended_register(&self) -> bool {
+  fn has_extended_register(self) -> bool {
     use self::ModRM::*;
 
-    match *self {
+    match self {
       TwoRegisters(source, dest) | MemoryTwoRegisters(source, dest) | MemoryTwoRegisters8BitDisplacement(source, dest, _) |
       MemoryTwoRegisters32BitDisplacement(source, dest, _) => {
         source.is_extended_register() || dest.is_extended_register()

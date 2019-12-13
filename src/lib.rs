@@ -1,4 +1,5 @@
 #![feature(box_patterns, slice_patterns)]
+#![allow(clippy::identity_op, clippy::unreadable_literal)]
 
 mod ast;
 mod assembler;
@@ -10,7 +11,7 @@ mod llvm;
 mod optimizer;
 mod parser;
 
-pub use executor::{Executor, ExecutionModel};
+pub use crate::executor::{Executor, ExecutionModel};
 
 extern crate libc;
 extern crate itertools;

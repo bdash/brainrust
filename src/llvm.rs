@@ -29,7 +29,7 @@ struct ModuleHelper<'a> {
 
 impl<'a> ModuleHelper<'a> {
   fn new(context: &'a Context, module: &'a Module, builder: &'a Builder) -> Self {
-    ModuleHelper { context: context, module: module, builder: builder }
+    ModuleHelper { context, module, builder }
   }
 
   fn emit_address_of_first_element(&'a self, array: &'a Value) -> &'a Value {
@@ -55,7 +55,7 @@ struct BufferedWriter<'a> {
 
 impl<'a> BufferedWriter<'a> {
   fn new(module_helper: &'a ModuleHelper<'a>) -> Self {
-    let s = BufferedWriter { module_helper: module_helper };
+    let s = BufferedWriter { module_helper };
     s.emit_buffered_write_function();
     s.emit_flush_buffered_writes_function();
     s
@@ -198,7 +198,7 @@ impl<'a> StackFrame<'a> {
     builder.build_store(0i64.compile(context), tape_head);
     builder.build_store(0i64.compile(context), output_buffer_size);
 
-    StackFrame { tape: tape, tape_head: tape_head, output_buffer: output_buffer, output_buffer_size: output_buffer_size }
+    StackFrame { tape, tape_head, output_buffer, output_buffer_size }
   }
 }
 
@@ -209,7 +209,7 @@ struct InstructionHelper<'a> {
 
 impl<'a> InstructionHelper<'a> {
   fn new(module_helper: &'a ModuleHelper<'a>, stack_frame: &'a StackFrame<'a>) -> Self {
-    InstructionHelper { module_helper: module_helper, stack_frame: stack_frame }
+    InstructionHelper { module_helper, stack_frame }
   }
 
   fn context(&self) -> &Context {
