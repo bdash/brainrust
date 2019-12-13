@@ -1,6 +1,7 @@
 use super::ast::Node;
+use std::fmt;
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone)]
 pub enum ByteCode {
   MoveLeft(usize),
   MoveRight(usize),
@@ -11,6 +12,24 @@ pub enum ByteCode {
   Input,
   LoopStart { end: usize },
   LoopEnd { start: usize },
+}
+
+impl fmt::Debug for ByteCode {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    use self::ByteCode::*;
+
+    match *self {
+      MoveLeft(amount) => write!(f, "MoveLeft({})", amount),
+      MoveRight(amount) => write!(f, "MoveRight({})", amount),
+      Add(amount, offset) => write!(f, "Add({}, {})", amount, offset),
+      Subtract(amount, offset) => write!(f, "Subtract({}, {})", amount, offset),
+      Set(amount, offset) => write!(f, "Set({}, {})", amount, offset),
+      Output => write!(f, "Output"),
+      Input => write!(f, "Input"),
+      LoopStart { end } => write!(f, "LoopStart{{ end: {} }}", end),
+      LoopEnd { start } => write!(f, "LoopEnd{{ start: {} }}", start),
+    }
+  }
 }
 
 impl ByteCode {

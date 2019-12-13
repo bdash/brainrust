@@ -1,6 +1,7 @@
 use super::parser::Token;
+use std::fmt;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub enum Node {
   Block(Vec<Node>),
   MoveLeft(usize),
@@ -11,6 +12,24 @@ pub enum Node {
   Output,
   Input,
   Loop(Box<Node>),
+}
+
+impl fmt::Debug for Node {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    use self::Node::*;
+
+    match *self {
+      Block(ref nodes) => write!(f, "{:#?}", nodes),
+      MoveLeft(amount) => write!(f, "MoveLeft({})", amount),
+      MoveRight(amount) => write!(f, "MoveRight({})", amount),
+      Add(amount, offset) => write!(f, "Add({}, {})", amount, offset),
+      Subtract(amount, offset) => write!(f, "Subtract({}, {})", amount, offset),
+      Set(amount, offset) => write!(f, "Set({}, {})", amount, offset),
+      Output => write!(f, "Output"),
+      Input => write!(f, "Input"),
+      Loop(ref nodes) => write!(f, "Loop({:#?})", nodes),
+    }
+  }
 }
 
 impl Node {
