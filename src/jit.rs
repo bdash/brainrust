@@ -34,9 +34,9 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
 
   let arguments = &[Register::RDI, Register::RSI, Register::RDX];
 
-  let tape_head = Register::RAX;
+  let tape_head = Register::RBX;
   let output_buffer_head = Register::R12;
-  let output_buffer_tail = Register::RBX;
+  let output_buffer_tail = Register::R14;
   let system_call_number = Register::RAX;
   let write_scratch_byte = Register::R13B;
   let write_scratch_byte_register = Register::R13;
@@ -71,7 +71,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
       // FIXME: Don't hard-code the jump displacement.
       Jnz(0x1e),
 
-      Push(tape_head),
+      Push(system_call_number),
 
       // Compute the number of bytes written
       MovRR(output_buffer_tail, arguments[2]),
@@ -86,7 +86,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
       // Reset the output buffer tail to the start.
       MovRR(output_buffer_head, output_buffer_tail),
 
-      Pop(tape_head),
+      Pop(system_call_number),
 
       Ret,
 
@@ -177,7 +177,6 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
         body.extend(lower(&[
           // Zero byte at tape head so that EOF will map to zero.
           MovIM(RegisterSize::Int8, 0, tape_head, 0),
-          Push(tape_head),
 
           // Read one byte into tape head.
           MovIR(1, arguments[2]),
@@ -186,7 +185,6 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
           MovIR(syscall_number(syscall::nr::READ) as u64, system_call_number),
 
           Syscall,
-          Pop(tape_head),
         ]));
       }
     }
