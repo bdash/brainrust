@@ -62,7 +62,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
     // FIXME: Put this at the end of the generated code to avoid having to jump over it.
 
       // Append byte to output buffer.
-      MovMR(tape_head, 0, write_scratch_byte),
+      MovMR(arguments[0], 0, write_scratch_byte),
       MovRM(write_scratch_byte, output_buffer_tail, 0),
       IncR(output_buffer_tail),
 
@@ -166,7 +166,22 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
         body[loop_start_patch_point + 2] = ((distance >> 16) & 0xff) as u8;
         body[loop_start_patch_point + 3] = ((distance >> 24) & 0xff) as u8;
       }
-      ByteCode::Output => {
+      ByteCode::Output { offset } => {
+        if offset != 0 {
+          body.extend(lower(&[
+            MovRR(tape_head, arguments[0]),
+            if offset > 0 {
+              AddIR(offset.abs() as u32, arguments[0])
+            } else {
+              SubIR(offset.abs() as u32, arguments[0])
+            },
+          ]));
+        } else {
+          body.extend(lower(&[
+            MovRR(tape_head, arguments[0]),
+          ]));
+        }
+
         let call_instruction_size = 5;
         let write_function_offset = -(body.len() as i32) - write_function_length - call_instruction_size;
         body.extend(lower(&[

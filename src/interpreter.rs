@@ -41,8 +41,8 @@ pub fn execute_bytecode(instructions: &[ByteCode]) {
             continue
           }
         }
-        ByteCode::Output => {
-          let c = *tape.get_unchecked(tape_head);
+        ByteCode::Output { offset } => {
+          let c = *tape.get_unchecked(((tape_head as i32) + offset) as usize);
           output.push(c);
           if c as char == '\n' {
             stdout().write_all(&output[..]).unwrap();

@@ -20,7 +20,7 @@ fn optimize_once(node: &Node) -> Node {
   use super::ast::Node::*;
 
   match *node {
-    Move(..) | Add{..} | Set{..} | Input | Output => node.clone(),
+    Move(..) | Add{..} | Set{..} | Input | Output{..} => node.clone(),
     Loop(box ref block) => {
       match *block.children().as_slice() {
         [ Add{ amount: -1, offset: 0 } ] => Set{ value: 0, offset: 0 },

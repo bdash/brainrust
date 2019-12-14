@@ -7,7 +7,7 @@ pub enum Node {
   Move(isize),
   Add{ amount: i8, offset: i32 },
   Set{ value: u8, offset: i32 },
-  Output,
+  Output{ offset: i32 },
   Input,
   Loop(Box<Node>),
 }
@@ -21,7 +21,7 @@ impl fmt::Debug for Node {
       Move(amount) => write!(f, "Move({})", amount),
       Add{ amount, offset } => write!(f, "Add{{ amount: {}, offset: {} }}", amount, offset),
       Set{ value, offset } => write!(f, "Set{{ value: {}, offset: {} }}", value, offset),
-      Output => write!(f, "Output"),
+      Output{ offset } => write!(f, "Output{{ offset: {} }}", offset),
       Input => write!(f, "Input"),
       Loop(ref nodes) => write!(f, "Loop({:#?})", nodes),
     }
@@ -40,7 +40,7 @@ impl Node {
         MoveRight => Some(Node::Move(1)),
         Add => Some(Node::Add{ amount: 1, offset: 0 }),
         Subtract => Some(Node::Add{ amount: -1, offset: 0 }),
-        Output => Some(Node::Output),
+        Output => Some(Node::Output{ offset: 0 }),
         Input => Some(Node::Input),
         LoopStart => {
           nodes.push(Vec::new());
