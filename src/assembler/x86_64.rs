@@ -218,6 +218,9 @@ pub enum MachineInstruction {
   SubRR(Register, Register),
   XorRR(Register, Register),
 
+  MulR(Register),
+  MulM(RegisterSize, Register, i32),
+
   CmpIR(u32, Register),
   CmpIM(RegisterSize, u32, Register, i32),
 
@@ -233,7 +236,7 @@ impl MachineInstruction {
 
     self.validate();
 
-    match *self {
+    match self {
       MovIR(_, _) if !self.mov_ir_needs_modrm_byte() => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
@@ -243,7 +246,8 @@ impl MachineInstruction {
       MovIR(..) | MovIM(..) | MovRR(..) | MovRM(..) | MovMR(..) |
       AddRR(..) | SubRR(..) | XorRR(..) | AddIR(..) | SubIR(..) |
       AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) |
-      IncR(..) | DecR(..) | IncM(..) | DecM(..)  => {
+      IncR(..) | DecR(..) | IncM(..) | DecM(..) |
+      MulR(..) | MulM(..) => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
@@ -337,6 +341,12 @@ impl MachineInstruction {
       SubRR(..) => 0x29,
       XorRR(..) => 0x31,
 
+      MulR(register) if register.size() == RegisterSize::Int8 => 0xf6,
+      MulR(..) => 0xf7,
+
+      MulM(RegisterSize::Int8, ..) => 0xf6,
+      MulM(..) => 0xf7,
+
       Jmp(constant) if constant >= -128 && constant < 128 => 0xeb,
       Jz(constant) if constant >= -128 && constant < 128 => 0x74,
       Jnz(constant) if constant >= -128 && constant < 128 => 0x75,
@@ -370,6 +380,9 @@ impl MachineInstruction {
       // Group 3
       IncR(..) | IncM(..) => Some(0b000),
       DecR(..) | DecM(..) => Some(0b001),
+
+      // What is this group stuff about?
+      MulR(..) | MulM(..) => Some(0b100),
 
       // None
       _ => None,
@@ -406,16 +419,16 @@ impl MachineInstruction {
         // MovRM and MovMR encode the memory register second.
         ModRM::MemoryTwoRegisters32BitDisplacement(reg1, reg2, offset)
       }
-      MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) | CmpIR(_, register) => {
+      MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) | CmpIR(_, register) | MulR(register) => {
         ModRM::Register(register)
       }
-      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if offset == 0 => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) | MulM(size, register, offset) if offset == 0 => {
         ModRM::Memory(size, register)
       }
-      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) if constant_fits_in_i8(offset) => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) | MulM(size, register, offset) if constant_fits_in_i8(offset) => {
         ModRM::Memory8BitDisplacement(size, register, offset as i8)
       }
-      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) => {
+      MovIM(size, _, register, offset) | AddIM(size, _, register, offset) | SubIM(size, _, register, offset) | CmpIM(size, _, register, offset) | MulM(size, register, offset) => {
         ModRM::Memory32BitDisplacement(size, register, offset)
       }
       IncM(size, register, offset) | DecM(size, register, offset) if offset == 0 => {
@@ -1231,6 +1244,29 @@ mod test {
     // FIXME: Is this only testing that at least one of the statements panics?
     lower(&[ XorRR(RAX, EAX) ]);
     lower(&[ XorRR(EAX, AH) ]);
+  }
+
+  #[test]
+  fn test_mul_r() {
+    assert_eq!(lower(&[ MulR(RBX) ]), vec![ 0b1001000, 0xf7, 0b11100011 ]);
+    assert_eq!(lower(&[ MulR(EBX) ]), vec![            0xf7, 0b11100011 ]);
+    assert_eq!(lower(&[ MulR(BX)  ]), vec![ 0x66,      0xf7, 0b11100011 ]);
+    assert_eq!(lower(&[ MulR(BH)  ]), vec![            0xf6, 0b11100111 ]);
+  }
+
+  #[test]
+  fn test_mul_m() {
+    assert_eq!(lower(&[ MulM(RegisterSize::Int64, RBX,  0) ]), vec![ 0b1001000, 0xf7, 0b00100011 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int64, RBX,  4) ]), vec![ 0b1001000, 0xf7, 0b01100011, 0x04 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int64, RBX, -4) ]), vec![ 0b1001000, 0xf7, 0b01100011, 0xfc ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int32, RBX,  4) ]), vec![            0xf7, 0b01100011, 0x04 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int16, RBX,  4) ]), vec![      0x66, 0xf7, 0b01100011, 0x04 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int8,  RBX,  4) ]), vec![            0xf6, 0b01100011, 0x04 ]);
+
+    assert_eq!(lower(&[ MulM(RegisterSize::Int64, EBX,  0) ]), vec![ 0x67, 0b1001000, 0xf7, 0b00100011 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int32, EBX,  0) ]), vec![            0x67, 0xf7, 0b00100011 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int16, EBX,  0) ]), vec![ 0x66,      0x67, 0xf7, 0b00100011 ]);
+    assert_eq!(lower(&[ MulM(RegisterSize::Int8,  EBX,  0) ]), vec![            0x67, 0xf6, 0b00100011 ]);
   }
 
   #[test]
