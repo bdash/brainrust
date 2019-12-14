@@ -38,8 +38,8 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
   let output_buffer_head = Register::R12;
   let output_buffer_tail = Register::R14;
   let system_call_number = Register::RAX;
-  let write_scratch_byte = Register::R13B;
-  let write_scratch_byte_register = Register::R13;
+  let scratch_byte_register = Register::R13B;
+  let scratch_register = Register::R13;
 
   let write_function_length = 0x2e;
 
@@ -47,7 +47,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
     Push(Register::RBP),
     Push(output_buffer_head),
     Push(output_buffer_tail),
-    Push(write_scratch_byte_register),
+    Push(scratch_register),
     MovRR(Register::RSP, Register::RBP),
 
     MovRR(arguments[0], tape_head),
@@ -62,12 +62,12 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
     // FIXME: Put this at the end of the generated code to avoid having to jump over it.
 
       // Append byte to output buffer.
-      MovMR(arguments[0], 0, write_scratch_byte),
-      MovRM(write_scratch_byte, output_buffer_tail, 0),
+      MovMR(arguments[0], 0, scratch_byte_register),
+      MovRM(scratch_byte_register, output_buffer_tail, 0),
       IncR(output_buffer_tail),
 
       // Don't call write until we see a newline character.
-      CmpIR(10, write_scratch_byte),
+      CmpIR(10, scratch_byte_register),
       // FIXME: Don't hard-code the jump displacement.
       Jnz(0x1e),
 
@@ -139,8 +139,28 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
           MovIM(RegisterSize::Int8, value as u32, tape_head, offset)
         ]));
       }
-      ByteCode::MultiplyAdd { .. } => {
-        unreachable!();
+      ByteCode::MultiplyAdd { multiplier, source, dest } => {
+        body.extend(lower(&[
+          // Move the multiplier into RAX, which is the implicit argument to the `mul` instruction.
+          XorRR(Register::EAX, Register::EAX),
+          MovIR(multiplier.abs() as u64, Register::AL),
+
+          // Multiply by the value at `tape_head + source`.
+          MulM(RegisterSize::Int8, tape_head, source),
+
+          // Load the value at `tape_head + dest` into scratch register.
+          MovMR(tape_head, dest, scratch_byte_register),
+
+          // Add / subtract the result of the multiply from it.
+          if multiplier > 0 {
+            AddRR(Register::AL, scratch_byte_register)
+          } else {
+            SubRR(Register::AL, scratch_byte_register)
+          },
+
+          // Store back to `tape_head + dest`.
+          MovRM(scratch_byte_register, tape_head, dest),
+        ]));
       }
       ByteCode::LoopStart { .. } => {
         body.extend(lower(&[
@@ -224,7 +244,7 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
     Syscall,
 
     XorRR(Register::RAX, Register::RAX),
-    Pop(write_scratch_byte_register),
+    Pop(scratch_register),
     Pop(output_buffer_tail),
     Pop(output_buffer_head),
     Pop(Register::RBP),

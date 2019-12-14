@@ -323,6 +323,7 @@ impl MachineInstruction {
       MovRR(..) | MovRM(..) => 0x89,
       MovMR(..) => 0x8b,
 
+      MovIR(.., register) if !self.mov_ir_needs_modrm_byte() && register.size() == RegisterSize::Int8 => 0xb0,
       MovIR(..) if !self.mov_ir_needs_modrm_byte() => 0xb8,
       MovIM(RegisterSize::Int8, _, _, _) => 0xc6,
       MovIR(..) | MovIM(..) => 0xc7,
@@ -835,6 +836,7 @@ mod test {
 
     assert_eq!(lower(& [ MovIR(1, EAX) ]), vec![       0xb8, 0x01, 0x00, 0x00, 0x00 ]);
     assert_eq!(lower(& [ MovIR(1, AX ) ]), vec![ 0x66, 0xb8, 0x01, 0x00 ]);
+    assert_eq!(lower(& [ MovIR(1, AL ) ]), vec![       0xb0, 0x01, ]);
   }
 
   #[test]
