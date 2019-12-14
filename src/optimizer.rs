@@ -28,11 +28,44 @@ fn optimize_once(node: &Node) -> Node {
       }
     }
     Block(ref children) => {
-      let simplified_children = simplify_mutation_sequences(children);
-      let optimized_children = simplified_children.iter().map(optimize_once).collect();
+      let optimized_children = simplify_mutation_sequences(&simplify_moves(children)).iter().map(optimize_once).collect();
       Block(optimized_children)
     }
   }
+}
+
+fn simplify_moves(children: &[Node]) -> Vec<Node> {
+  children.iter().group_by(|&node| node.supports_offset()).into_iter().flat_map(|(key, group)| {
+    if !key {
+      group.cloned().collect()
+    } else {
+      let group_nodes: Vec<_> = group.collect();
+      propagate_offsets(&group_nodes)
+    }
+  }).collect()
+}
+
+fn propagate_offsets(nodes: &[&Node]) -> Vec<Node> {
+  use super::ast::Node::*;
+
+  let mut index = 0i32;
+
+  let mut result: Vec<_> = nodes.into_iter().flat_map(|node| {
+    match **node {
+      Move(amount) => {
+        index += amount as i32;
+        None
+      }
+      Add { amount, offset } => Some(Add { amount, offset: offset + index }),
+      Set { value, offset } => Some(Set { value, offset: offset + index }),
+      Output { offset } => Some(Output { offset: offset + index }),
+      _ => panic!()
+    }
+  }).collect();
+  if index != 0 {
+    result.push(Move(index as isize));
+  }
+  result
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -61,43 +94,39 @@ fn simplify_mutation_sequences(children: &[Node]) -> Vec<Node> {
       group.cloned().collect()
     } else {
       let group_nodes: Vec<_> = group.collect();
-      let (index, mutations) = evaluate_mutations(&group_nodes);
+      let mutations = evaluate_mutations(&group_nodes);
 
-      let mut modified_offsets = mutations.keys().collect::<Vec<&i32>>();
+      let mut modified_offsets = mutations.keys().cloned().collect::<Vec<_>>();
       modified_offsets.sort();
 
       modified_offsets.iter().flat_map(|offset| {
-        let value = mutations[*offset];
+        let value = mutations[offset];
         match value {
-          Mutation::Add(value) => Some(Add{ amount: value, offset: **offset }),
-          Mutation::Set(value) => Some(Set{ value: value as u8, offset: **offset })
+          Mutation::Add(value) => Some(Add{ amount: value, offset: *offset }),
+          Mutation::Set(value) => Some(Set{ value: value as u8, offset: *offset })
         }
-      }).chain(
-        if index == 0 { None } else { Some(Move(index as isize)) }
-      ).collect::<Vec<_>>()
+      }).collect::<Vec<_>>()
     }
   }).collect()
 }
 
-fn evaluate_mutations(nodes: &[&Node]) -> (i32, HashMap<i32, Mutation>) {
+fn evaluate_mutations(nodes: &[&Node]) -> HashMap<i32, Mutation> {
   use super::ast::Node::*;
 
   let mut mutations = HashMap::new();
-  let mut index = 0i32;
 
   for node in nodes {
     match **node {
-      Move(amount) => index += amount as i32,
       Add{ amount, offset } => {
-        let value = mutations.entry(index + offset).or_insert(Mutation::Add(0));
+        let value = mutations.entry(offset).or_insert(Mutation::Add(0));
         value.combine(Mutation::Add(amount));
       }
       Set{ value: amount, offset } => {
-        let value = mutations.entry(index + offset).or_insert(Mutation::Set(0));
+        let value = mutations.entry(offset).or_insert(Mutation::Set(0));
         value.combine(Mutation::Set(amount as i8));
       }
       _ => panic!()
     }
   }
-  (index, mutations)
+  mutations
 }

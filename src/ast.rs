@@ -58,7 +58,7 @@ impl Node {
   }
 
   pub fn children(&self) -> Vec<Node> {
-    match *self {
+    match self {
       Node::Block(ref children) => children.clone(),
       _ => vec![],
     }
@@ -67,8 +67,17 @@ impl Node {
   pub fn is_mutation(&self) -> bool {
     use self::Node::*;
 
-    match *self {
-      Move(..) | Add{..} | Set{..} => true,
+    match self {
+      Add{..} | Set{..} => true,
+      _ => false,
+    }
+  }
+
+  pub fn supports_offset(&self) -> bool {
+    use self::Node::*;
+
+    match self {
+      Move(..) | Add{..} | Set{..} | Output{..} => true,
       _ => false,
     }
   }
