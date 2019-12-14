@@ -7,6 +7,7 @@ pub enum Node {
   Move(isize),
   Add{ amount: i8, offset: i32 },
   Set{ value: u8, offset: i32 },
+  MultiplyAdd { multiplier: i8, source: i32, dest: i32 },
   Output{ offset: i32 },
   Input,
   Loop(Box<Node>),
@@ -21,6 +22,7 @@ impl fmt::Debug for Node {
       Move(amount) => write!(f, "Move({})", amount),
       Add{ amount, offset } => write!(f, "Add{{ amount: {}, offset: {} }}", amount, offset),
       Set{ value, offset } => write!(f, "Set{{ value: {}, offset: {} }}", value, offset),
+      MultiplyAdd{ multiplier, source, dest } => write!(f, "MultiplyAdd{{ multiplier: {}, source: {}, dest: {} }}", multiplier, source, dest),
       Output{ offset } => write!(f, "Output{{ offset: {} }}", offset),
       Input => write!(f, "Input"),
       Loop(ref nodes) => write!(f, "Loop({:#?})", nodes),
@@ -29,6 +31,11 @@ impl fmt::Debug for Node {
 }
 
 impl Node {
+  pub fn from_bytes(bytes: &[u8]) -> Node {
+    let tokens = bytes.iter().cloned().filter_map(Token::from_byte).collect();
+    Node::from_tokens(tokens)
+  }
+
   pub fn from_tokens(tokens: Vec<Token>) -> Node {
     use super::parser::Token::*;
 
@@ -57,14 +64,15 @@ impl Node {
     Node::Block(nodes.pop().unwrap())
   }
 
-  pub fn children(&self) -> Vec<Node> {
+  pub fn is_add(&self) -> bool {
+    use self::Node::*;
     match self {
-      Node::Block(ref children) => children.clone(),
-      _ => vec![],
+      Add{..} => true,
+      _ => false,
     }
   }
 
-  pub fn is_mutation(&self) -> bool {
+  pub fn is_add_or_set(&self) -> bool {
     use self::Node::*;
 
     match self {
@@ -77,7 +85,7 @@ impl Node {
     use self::Node::*;
 
     match self {
-      Move(..) | Add{..} | Set{..} | Output{..} => true,
+      Move(..) | Add{..} | Set{..} | MultiplyAdd{..} | Output{..} => true,
       _ => false,
     }
   }

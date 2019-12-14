@@ -752,7 +752,7 @@ fn show_representation(instructions: &[MachineInstruction]) {
 }
 
 #[cfg(test)]
- mod test {
+mod test {
   use super::{lower, RegisterSize};
   use super::MachineInstruction::*;
   use super::Register::*;

@@ -139,6 +139,9 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
           MovIM(RegisterSize::Int8, value as u32, tape_head, offset)
         ]));
       }
+      ByteCode::MultiplyAdd { .. } => {
+        unreachable!();
+      }
       ByteCode::LoopStart { .. } => {
         body.extend(lower(&[
           CmpIM(RegisterSize::Int8, 0, tape_head, 0),

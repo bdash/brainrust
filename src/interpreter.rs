@@ -28,6 +28,20 @@ pub fn execute_bytecode(instructions: &[ByteCode]) {
           let value = tape.get_unchecked_mut(((tape_head as i32) + offset) as usize);
           *value = constant;
         }
+        ByteCode::MultiplyAdd{ multiplier, source, dest } => {
+          let source = tape[((tape_head as i32) + source) as usize];
+          let dest = tape.get_unchecked_mut(((tape_head as i32) + dest) as usize);
+          let result = if multiplier > 0 {
+            dest.wrapping_add(source.wrapping_mul(multiplier as u8))
+          } else {
+            let mut result = *dest;
+            for _ in 0..source {
+              result = result.wrapping_sub((-multiplier) as u8);
+            }
+            result
+          };
+          *dest = result;
+        }
 
         ByteCode::LoopStart { end } => {
           if *tape.get_unchecked(tape_head) == 0 {
@@ -51,8 +65,12 @@ pub fn execute_bytecode(instructions: &[ByteCode]) {
         }
         ByteCode::Input => {
           let mut input = [0u8; 1];
-          stdin().read_exact(&mut input[..]).unwrap();
-          tape[tape_head] = input[0];
+          let value = if stdin().read_exact(&mut input[..]).is_ok() {
+            input[0]
+          } else {
+            0
+          };
+          tape[tape_head] = value;
         }
       }
       ip += 1
