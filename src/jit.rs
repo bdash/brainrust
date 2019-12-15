@@ -190,20 +190,9 @@ fn compile_to_machinecode(instructions: &[ByteCode]) -> Vec<u8> {
         body[loop_start_patch_point + 3] = ((distance >> 24) & 0xff) as u8;
       }
       ByteCode::Output { offset } => {
-        if offset != 0 {
-          body.extend(lower(&[
-            MovRR(tape_head, arguments[0]),
-            if offset > 0 {
-              AddIR(offset.abs() as u32, arguments[0])
-            } else {
-              SubIR(offset.abs() as u32, arguments[0])
-            },
-          ]));
-        } else {
-          body.extend(lower(&[
-            MovRR(tape_head, arguments[0]),
-          ]));
-        }
+        body.extend(lower(&[
+          Lea(tape_head, offset, arguments[0]),
+        ]));
 
         let call_instruction_size = 5;
         let write_function_offset = -(body.len() as i32) - write_function_length - call_instruction_size;

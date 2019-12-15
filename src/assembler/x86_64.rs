@@ -224,6 +224,8 @@ pub enum MachineInstruction {
   CmpIR(u32, Register),
   CmpIM(RegisterSize, u32, Register, i32),
 
+  Lea(Register, i32, Register),
+
   Jmp(i32),
   Jz(i32),
   Jnz(i32),
@@ -247,7 +249,7 @@ impl MachineInstruction {
       AddRR(..) | SubRR(..) | XorRR(..) | AddIR(..) | SubIR(..) |
       AddIM(..) | SubIM(..) | CmpIM(..) | CmpIR(..) |
       IncR(..) | DecR(..) | IncM(..) | DecM(..) |
-      MulR(..) | MulM(..) => {
+      MulR(..) | MulM(..) | Lea(..) => {
         let modrm = self.modrm();
         modrm.emit_prefixes_if_needed(machine_code);
         self.emit_opcode(machine_code);
@@ -348,6 +350,8 @@ impl MachineInstruction {
       MulM(RegisterSize::Int8, ..) => 0xf6,
       MulM(..) => 0xf7,
 
+      Lea(..) => 0x8d,
+
       Jmp(constant) if constant >= -128 && constant < 128 => 0xeb,
       Jz(constant) if constant >= -128 && constant < 128 => 0x74,
       Jnz(constant) if constant >= -128 && constant < 128 => 0x75,
@@ -408,16 +412,16 @@ impl MachineInstruction {
       MovRR(source, dest) | AddRR(source, dest) | SubRR(source, dest) | XorRR(source, dest) => {
         ModRM::TwoRegisters(source, dest)
       }
-      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if offset == 0 => {
-        // MovRM and MovMR encode the memory register second.
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) | Lea(reg2, offset, reg1) if offset == 0 => {
+        // MovRM, MovMR, and Lea encode the memory register second.
         ModRM::MemoryTwoRegisters(reg1, reg2)
       }
-      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) if constant_fits_in_i8(offset) => {
-        // MovRM and MovMR encode the memory register second.
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) | Lea(reg2, offset, reg1) if constant_fits_in_i8(offset) => {
+        // MovRM, MovMR, and Lea encode the memory register second.
         ModRM::MemoryTwoRegisters8BitDisplacement(reg1, reg2, offset as i8)
       }
-      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) => {
-        // MovRM and MovMR encode the memory register second.
+      MovRM(reg1, reg2, offset) | MovMR(reg2, offset, reg1) | Lea(reg2, offset, reg1) => {
+        // MovRM, MovMR, and Lea encode the memory register second.
         ModRM::MemoryTwoRegisters32BitDisplacement(reg1, reg2, offset)
       }
       MovIR(_, register) | AddIR(_, register) | SubIR(_, register) | IncR(register) | DecR(register) | CmpIR(_, register) | MulR(register) => {
@@ -1269,6 +1273,43 @@ mod test {
     assert_eq!(lower(&[ MulM(RegisterSize::Int32, EBX,  0) ]), vec![            0x67, 0xf7, 0b00100011 ]);
     assert_eq!(lower(&[ MulM(RegisterSize::Int16, EBX,  0) ]), vec![ 0x66,      0x67, 0xf7, 0b00100011 ]);
     assert_eq!(lower(&[ MulM(RegisterSize::Int8,  EBX,  0) ]), vec![            0x67, 0xf6, 0b00100011 ]);
+  }
+
+  #[test]
+  fn test_lea() {
+    assert_eq!(lower(&[ Lea(RBX, 0, RAX) ]), vec![ 0b1001000, 0x8d, 0b00000011 ]);
+    assert_eq!(lower(&[ Lea(RBX, 0, R8 ) ]), vec![ 0b1001100, 0x8d, 0b00000011 ]);
+    assert_eq!(lower(&[ Lea(R8 , 0, RBX) ]), vec![ 0b1001001, 0x8d, 0b00011000 ]);
+
+    assert_eq!(lower(&[ Lea(RBX, 0, EAX) ]), vec![            0x8d, 0b00000011 ]);
+    assert_eq!(lower(&[ Lea(RBX, 0, R8D) ]), vec![ 0b1000100, 0x8d, 0b00000011 ]);
+
+    assert_eq!(lower(&[ Lea(RBX, 0, AX ) ]), vec![            0x66, 0x8d, 0b00000011 ]);
+    assert_eq!(lower(&[ Lea(RBX, 0, R8W) ]), vec![ 0x66, 0b1000100, 0x8d, 0b00000011 ]);
+
+    // TODO: These should not work, but are currently miscompiled.
+    // assert_eq!(lower(&[ Lea(RBX, 0, AH ) ]), vec![            0x8d, 0b00100011 ]);
+    // assert_eq!(lower(&[ Lea(RBX, 0, AL ) ]), vec![            0x8d, 0b00000011 ]);
+    // assert_eq!(lower(&[ Lea(RBX, 0, R8B) ]), vec![ 0b1000100, 0x8d, 0b00000011 ]);
+
+
+    assert_eq!(lower(&[ Lea(RBX, 16, RAX) ]), vec![ 0b1001000, 0x8d, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ Lea(RBX, 16, R8 ) ]), vec![ 0b1001100, 0x8d, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ Lea(RBX, 16, EAX) ]), vec![            0x8d, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ Lea(RBX, 16, R8D) ]), vec![ 0b1000100, 0x8d, 0b01000011, 0x10 ]);
+
+    assert_eq!(lower(&[ Lea(RBX, 16, AX ) ]), vec![            0x66, 0x8d, 0b01000011, 0x10 ]);
+    assert_eq!(lower(&[ Lea(RBX, 16, R8W) ]), vec![ 0x66, 0b1000100, 0x8d, 0b01000011, 0x10 ]);
+
+    // TODO: These should not work, but are currently miscompiled.
+    // assert_eq!(lower(&[ Lea(RBX, 16, AH ) ]), vec![            0x8d, 0b01100011, 0x10 ]);
+    // assert_eq!(lower(&[ Lea(RBX, 16, AL ) ]), vec![            0x8d, 0b01000011, 0x10 ]);
+    // assert_eq!(lower(&[ Lea(RBX, 16, R8B) ]), vec![ 0b1000100, 0x8d, 0b01000011, 0x10 ]);
+
+
+    assert_eq!(lower(&[ Lea(RBX, 1024, RAX) ]), vec![ 0b1001000, 0x8d, 0b10000011, 0x00, 0x04, 0x00, 0x00 ]);
+    assert_eq!(lower(&[ Lea(RBX, 1024, R8 ) ]), vec![ 0b1001100, 0x8d, 0b10000011, 0x00, 0x04, 0x00, 0x00 ]);
   }
 
   #[test]
