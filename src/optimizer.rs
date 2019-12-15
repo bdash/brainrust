@@ -4,68 +4,91 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-pub fn optimize(node: &Node) -> Node {
-  dbg!(&node);
-  let mut node = node.clone();
+pub fn optimize_all(node: &Node) -> Vec<Node> {
+  let mut optimized = vec!(node.clone());
+  let optimizers = [
+    Box::new(SimplifyMoves) as Box<dyn Transformation>,
+    Box::new(SimplifyMutationSequences),
+    Box::new(SimplifyLoops),
+  ];
   loop {
-    let optimized = optimize_once(&node);
-    if optimized == node {
+    let prior_length = optimized.len();
+    for optimizer in &optimizers {
+      let last = optimized.last().unwrap();
+      let transformed = optimizer.transform(last);
+      if transformed != *last {
+        optimized.push(transformed);
+      }
+    }
+    if optimized.len() == prior_length {
+      // If the optimization pass didn't produce a different AST than it started with, we're done.
       break;
     }
-    node = optimized;
-    dbg!(&node);
   }
-  node
+  optimized
 }
 
-fn optimize_once(node: &Node) -> Node {
-  use super::ast::Node::*;
-
-  match node {
-    Move(..) | Add{..} | Set{..} | MultiplyAdd{..} | Input | Output{..} => node.clone(),
-    Loop(box block) => Loop(Box::new(optimize_once(block))),
-    Block(children) => {
-      Block(
-        simplify_loops(simplify_mutation_sequences(&simplify_moves(children)))
-          .iter().map(optimize_once).collect()
-      )
-    }
-  }
+pub fn optimize(node: &Node) -> Node {
+  optimize_all(node).pop().unwrap()
 }
 
-fn simplify_moves(children: &[Node]) -> Vec<Node> {
-  children.iter().group_by(|&node| node.supports_offset()).into_iter().flat_map(|(key, group)| {
-    if !key {
-      group.cloned().collect()
-    } else {
-      let group_nodes: Vec<_> = group.collect();
-      propagate_offsets(&group_nodes)
-    }
-  }).collect()
-}
+trait Transformation {
+  fn transform_block(&self, &[Node]) -> Vec<Node>;
 
-fn propagate_offsets(nodes: &[&Node]) -> Vec<Node> {
-  use super::ast::Node::*;
+  fn transform(&self, node: &Node) -> Node {
+    use super::ast::Node::*;
 
-  let mut index = 0i32;
-
-  let mut result: Vec<_> = nodes.into_iter().flat_map(|node| {
-    match **node {
-      Move(amount) => {
-        index += amount as i32;
-        None
+    match node {
+      Move(..) | Add{..} | Set{..} | MultiplyAdd{..} | Input | Output{..} => node.clone(),
+      Loop(box block) => Loop(Box::new(self.transform(block))),
+      Block(children) => {
+        Block(
+          self.transform_block(children).iter().map(|n| self.transform(n)).collect()
+        )
       }
-      Add { amount, offset } => Some(Add { amount, offset: offset + index }),
-      Set { value, offset } => Some(Set { value, offset: offset + index }),
-      MultiplyAdd { multiplier, source, dest } => Some(MultiplyAdd { multiplier: multiplier, source: source + index, dest: dest + index }),
-      Output { offset } => Some(Output { offset: offset + index }),
-      _ => panic!()
     }
-  }).collect();
-  if index != 0 {
-    result.push(Move(index as isize));
   }
-  result
+}
+
+struct SimplifyMoves;
+
+impl SimplifyMoves {
+  fn propagate_offsets(&self, nodes: &[&Node]) -> Vec<Node> {
+    use super::ast::Node::*;
+
+    let mut index = 0i32;
+
+    let mut result: Vec<_> = nodes.iter().flat_map(|node| {
+      match **node {
+        Move(amount) => {
+          index += amount as i32;
+          None
+        }
+        Add { amount, offset } => Some(Add { amount, offset: offset + index }),
+        Set { value, offset } => Some(Set { value, offset: offset + index }),
+        MultiplyAdd { multiplier, source, dest } => Some(MultiplyAdd { multiplier, source: source + index, dest: dest + index }),
+        Output { offset } => Some(Output { offset: offset + index }),
+        _ => panic!()
+      }
+    }).collect();
+    if index != 0 {
+      result.push(Move(index as isize));
+    }
+    result
+  }
+}
+
+impl Transformation for SimplifyMoves {
+  fn transform_block(&self, children: &[Node]) -> Vec<Node> {
+    children.iter().group_by(|&node| node.supports_offset()).into_iter().flat_map(|(key, group)| {
+      if !key {
+        group.cloned().collect()
+      } else {
+        let group_nodes: Vec<_> = group.collect();
+        self.propagate_offsets(&group_nodes)
+      }
+    }).collect()
+  }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -86,101 +109,106 @@ impl Mutation {
   }
 }
 
-fn simplify_mutation_sequences(children: &[Node]) -> Vec<Node> {
-  use super::ast::Node::*;
+struct SimplifyMutationSequences;
 
-  children.iter().group_by(|&node| node.is_add_or_set()).into_iter().flat_map(|(key, group)| {
-    if !key {
-      group.cloned().collect()
-    } else {
-      let group_nodes: Vec<_> = group.collect();
-      let mutations = evaluate_mutations(&group_nodes);
+impl SimplifyMutationSequences {
+  fn evaluate_mutations(&self, nodes: &[&Node]) -> HashMap<i32, Mutation> {
+    use super::ast::Node::*;
 
-      let mut modified_offsets = mutations.keys().cloned().collect::<Vec<_>>();
-      modified_offsets.sort();
+    let mut mutations = HashMap::new();
 
-      modified_offsets.iter().flat_map(|offset| {
-        let value = mutations[offset];
-        match value {
-          Mutation::Add(value) => Some(Add{ amount: value, offset: *offset }),
-          Mutation::Set(value) => Some(Set{ value: value as u8, offset: *offset })
+    for node in nodes {
+      match **node {
+        Add{ amount, offset } => {
+          let value = mutations.entry(offset).or_insert(Mutation::Add(0));
+          value.combine(Mutation::Add(amount));
         }
-      }).collect::<Vec<_>>()
-    }
-  }).collect()
-}
-
-fn evaluate_mutations(nodes: &[&Node]) -> HashMap<i32, Mutation> {
-  use super::ast::Node::*;
-
-  let mut mutations = HashMap::new();
-
-  for node in nodes {
-    match **node {
-      Add{ amount, offset } => {
-        let value = mutations.entry(offset).or_insert(Mutation::Add(0));
-        value.combine(Mutation::Add(amount));
+        Set{ value: amount, offset } => {
+          let value = mutations.entry(offset).or_insert(Mutation::Set(0));
+          value.combine(Mutation::Set(amount as i8));
+        }
+        _ => panic!()
       }
-      Set{ value: amount, offset } => {
-        let value = mutations.entry(offset).or_insert(Mutation::Set(0));
-        value.combine(Mutation::Set(amount as i8));
-      }
-      _ => panic!()
     }
-  }
-  mutations
-}
-
-fn simplify_loops(children: Vec<Node>) -> Vec<Node> {
-  use super::ast::Node::*;
-
-  children.into_iter().flat_map(|node| {
-    match node {
-      Loop(box children) => simplify_loop(children).into_iter(),
-      _ => vec!(node).into_iter(),
-    }
-  }).collect()
-}
-
-fn is_substract_at_offset_0(node: &&Node) -> bool {
-  match **node {
-    // TODO: It should be possible to generalize this optimization to handle loops with a stride larger than one.
-    Node::Add{ amount: -1, offset: 0 } => true,
-    _ => false,
+    mutations
   }
 }
 
-fn simplify_loop(node: Node) -> Vec<Node> {
-  use super::ast::Node::*;
+impl Transformation for SimplifyMutationSequences {
+  fn transform_block(&self, children: &[Node]) -> Vec<Node> {
+    use super::ast::Node::*;
 
-  match node {
-    Block(children) => {
-      if !children.iter().all(Node::is_add) {
-        return vec!(Loop(Box::new(Block(children))))
-      }
+    children.iter().group_by(|&node| node.is_add_or_set()).into_iter().flat_map(|(key, group)| {
+      if !key {
+        group.cloned().collect()
+      } else {
+        let group_nodes: Vec<_> = group.collect();
+        let mutations = self.evaluate_mutations(&group_nodes);
 
-      if let Some(Node::Add{ amount: _amount, offset: 0 }) = children.iter().find(is_substract_at_offset_0) {
-        let mut result = Vec::new();
-        // dbg!(&children);
-        for child in children {
-          if is_substract_at_offset_0(&&child) {
-            continue;
+        let mut modified_offsets = mutations.keys().cloned().collect::<Vec<_>>();
+        modified_offsets.sort();
+
+        modified_offsets.iter().flat_map(|offset| {
+          let value = mutations[offset];
+          match value {
+            Mutation::Add(value) => Some(Add{ amount: value, offset: *offset }),
+            Mutation::Set(value) => Some(Set{ value: value as u8, offset: *offset })
           }
-
-          result.push(match child {
-            Add { offset: 0, .. } => panic!("Unexpected secondary addition to offset 0"),
-            Add { amount, offset } => MultiplyAdd { multiplier: amount, source: 0, dest: offset },
-            Set { .. } => child,
-            _ => unreachable!(),
-          });
-        }
-        result.push(Set { value: 0, offset: 0 });
-        // dbg!(&result);
-        return result;
+        }).collect::<Vec<_>>()
       }
-      return vec!(Loop(Box::new(Block(children))))
-    },
-    _ => unreachable!(),
+    }).collect()
+  }
+}
+
+struct SimplifyLoops;
+
+impl SimplifyLoops {
+  fn is_substract_at_offset_0(node: &&Node) -> bool {
+    match **node {
+      // TODO: It should be possible to generalize this optimization to handle loops with a stride larger than one.
+      Node::Add{ amount: -1, offset: 0 } => true,
+      _ => false,
+    }
+  }
+
+  fn simplify_loop(&self, children: &[Node]) -> Vec<Node> {
+    use super::ast::Node::*;
+
+    if !children.iter().all(Node::is_add) {
+      return vec!(Loop(Box::new(Block(children.to_vec()))))
+    }
+
+    if let Some(Node::Add{ offset: 0, .. }) = children.iter().find(Self::is_substract_at_offset_0) {
+      let mut result = Vec::new();
+      for child in children {
+        if Self::is_substract_at_offset_0(&&child) {
+          continue;
+        }
+
+        result.push(match child {
+          Add { offset: 0, .. } => panic!("Unexpected secondary addition to offset 0"),
+          Add { amount, offset } => MultiplyAdd { multiplier: *amount, source: 0, dest: *offset },
+          Set { .. } => child.clone(),
+          _ => unreachable!(),
+        });
+      }
+      result.push(Set { value: 0, offset: 0 });
+      return result;
+    }
+    return vec!(Loop(Box::new(Block(children.to_vec()))))
+  }
+}
+
+impl Transformation for SimplifyLoops {
+  fn transform_block(&self, children: &[Node]) -> Vec<Node> {
+    use super::ast::Node::*;
+
+    children.iter().flat_map(|node| {
+      match node {
+        Loop(box Block(children)) => self.simplify_loop(&children).into_iter(),
+        _ => vec!(node.clone()).into_iter(),
+      }
+    }).collect()
   }
 }
 
@@ -192,13 +220,13 @@ mod test {
   #[test]
   fn test_simplify_loop() {
     assert_eq!(
-      simplify_loop(Block(vec!())),
+      SimplifyLoops.simplify_loop(&[]),
       vec!(Loop(Box::new(Block(vec!())))),
     );
 
     assert_eq!(
-      simplify_loop(
-        Block(vec!(Add{ amount: -1, offset: 0 })),
+      SimplifyLoops.simplify_loop(
+        &[Add{ amount: -1, offset: 0 }],
       ),
       vec!(Set { value: 0, offset: 0 }),
     );
@@ -206,18 +234,16 @@ mod test {
 
     // TODO: It should be possible to generalize this optimization to handle loops with a stride larger than one.
     // assert_eq!(
-    //   simplify_loop(
-    //     Block(vec!(Add{ amount: -5, offset: 0 })),
+    //   SimplifyLoops.transform_block(
+    //     &vec!(Add{ amount: -5, offset: 0 }),
     //   ),
     //   vec!(Set { value: 0, offset: 0 }),
     // );
 
     assert_eq!(
-      simplify_loop(
-        Block(vec!(
-          Add{ amount: -1, offset: 0 },
-          Add{ amount: 1, offset: 1},
-        )),
+      SimplifyLoops.simplify_loop(
+        &[Add{ amount: -1, offset: 0 },
+          Add{ amount: 1, offset: 1}],
       ),
       vec!(
         MultiplyAdd{ multiplier: 1, source: 0, dest: 1 },
