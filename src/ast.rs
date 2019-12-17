@@ -1,4 +1,4 @@
-use super::parser::Token;
+use crate::parser::Token;
 use std::fmt;
 
 #[derive(PartialEq, Clone)]
@@ -17,15 +17,15 @@ impl fmt::Debug for Node {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     use self::Node::*;
 
-    match *self {
-      Block(ref nodes) => write!(f, "{:#?}", nodes),
+    match self {
+      Block(nodes) => write!(f, "{:#?}", nodes),
       Move(amount) => write!(f, "Move({})", amount),
       Add{ amount, offset } => write!(f, "Add{{ amount: {}, offset: {} }}", amount, offset),
       Set{ value, offset } => write!(f, "Set{{ value: {}, offset: {} }}", value, offset),
       MultiplyAdd{ multiplier, source, dest } => write!(f, "MultiplyAdd{{ multiplier: {}, source: {}, dest: {} }}", multiplier, source, dest),
       Output{ offset } => write!(f, "Output{{ offset: {} }}", offset),
       Input => write!(f, "Input"),
-      Loop(ref nodes) => write!(f, "Loop({:#?})", nodes),
+      Loop(nodes) => write!(f, "Loop({:#?})", nodes),
     }
   }
 }
@@ -65,11 +65,7 @@ impl Node {
   }
 
   pub fn is_add(&self) -> bool {
-    use self::Node::*;
-    match self {
-      Add{..} => true,
-      _ => false,
-    }
+    if let self::Node::Add{..} = self { true } else { false }
   }
 
   pub fn is_add_or_set(&self) -> bool {

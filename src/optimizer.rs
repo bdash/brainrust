@@ -1,4 +1,4 @@
-use super::ast::Node;
+use crate::ast::Node;
 
 use std::collections::HashMap;
 
@@ -33,14 +33,14 @@ pub fn optimize(node: &Node) -> Node {
 }
 
 trait Transformation {
-  fn transform_block(&self, &[Node]) -> Vec<Node>;
+  fn transform_block(&self, children: &[Node]) -> Vec<Node>;
 
   fn transform(&self, node: &Node) -> Node {
     use super::ast::Node::*;
 
     match node {
       Move(..) | Add{..} | Set{..} | MultiplyAdd{..} | Input | Output{..} => node.clone(),
-      Loop(box block) => Loop(Box::new(self.transform(block))),
+      Loop(block) => Loop(Box::new(self.transform(block))),
       Block(children) => {
         Block(
           self.transform_block(children).iter().map(|n| self.transform(n)).collect()

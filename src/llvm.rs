@@ -1,6 +1,6 @@
 #![cfg(feature="llvm")]
 
-use super::bytecode::*;
+use crate::bytecode::*;
 
 use llvm_rs::*;
 

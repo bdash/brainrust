@@ -1,4 +1,4 @@
-use super::bytecode::*;
+use crate::bytecode::*;
 
 use std::io::{Read, Write, stdin, stdout};
 

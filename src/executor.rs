@@ -1,9 +1,9 @@
-use super::ast::Node;
-use super::bytecode::ByteCode;
-use super::{interpreter, jit, optimizer};
+use crate::ast::Node;
+use crate::bytecode::ByteCode;
+use crate::{interpreter, jit, optimizer};
 
 #[cfg(feature="llvm")]
-use super::llvm;
+use crate::llvm;
 
 pub struct Executor {
   ast: Node,

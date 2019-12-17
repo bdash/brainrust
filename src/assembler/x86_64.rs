@@ -1,5 +1,3 @@
-use std;
-
 #[derive(Copy, Clone, Debug)]
 enum RegisterNumber {
   RAX = 0,
@@ -376,7 +374,7 @@ impl MachineInstruction {
   fn group_opcode(&self) -> Option<u8> {
     use self::MachineInstruction::*;
 
-    match *self {
+    match self {
       // Group 1
       AddIR(..) | AddIM(..) => Some(0b000),
       SubIR(..) | SubIM(..) => Some(0b101),

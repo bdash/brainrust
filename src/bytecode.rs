@@ -1,4 +1,4 @@
-use super::ast::Node;
+use crate::ast::Node;
 use std::fmt;
 
 #[derive(PartialEq, Copy, Clone)]
@@ -17,7 +17,7 @@ impl fmt::Debug for ByteCode {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     use self::ByteCode::*;
 
-    match *self {
+    match self {
       Move(amount) => write!(f, "Move({})", amount),
       Add{ amount, offset } => write!(f, "Add{{ amount: {}, offset: {} }}", amount, offset),
       Set{ value, offset } => write!(f, "Set{{ value: {}, offset: {} }}", value, offset),
@@ -48,8 +48,8 @@ impl ByteCode {
       return vec![ code ]
     }
 
-    match *node {
-      Loop(box ref block) => {
+    match node {
+      Loop(block) => {
         let block_bytecode = Self::from_ast_at_offset(block, offset + 1);
         let start = ByteCode::LoopStart { end: offset + block_bytecode.len() + 1};
         let end = ByteCode::LoopEnd { start: offset };
@@ -59,7 +59,7 @@ impl ByteCode {
         result.push(end);
         result
       }
-      Block(ref children) => {
+      Block(children) => {
         let mut bytecode = Vec::new();
         for node in children {
           let current_offset = bytecode.len() + offset;

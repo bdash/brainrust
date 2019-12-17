@@ -1,7 +1,6 @@
-use super::assembler::x86_64::*;
-use super::bytecode::*;
+use crate::assembler::x86_64::*;
+use crate::bytecode::*;
 
-use std;
 use std::mem;
 use std::ptr;
 

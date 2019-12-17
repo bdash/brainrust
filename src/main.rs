@@ -1,6 +1,3 @@
-extern crate argparse;
-extern crate brainrust;
-
 use std::fs::File;
 use std::io::{Result, Read};
 use std::path::Path;
