@@ -6,14 +6,13 @@ use llvm_rs::*;
 
 fn label(instruction: &ByteCode, index: usize) -> String {
   format!("i-{}-{}", index, match *instruction {
-      ByteCode::MoveLeft(amount) => format!("move-left-{}", amount),
-      ByteCode::MoveRight(amount) => format!("move-right-{}", amount),
-      ByteCode::Add(amount, offset) => format!("add-{}-{}", amount, offset),
-      ByteCode::Subtract(amount, offset) => format!("sub-{}-{}", amount, offset),
-      ByteCode::Set(value, offset) => format!("set-{}-{}", value, offset),
+      ByteCode::Move(amount) => format!("move-{}", amount),
+      ByteCode::Add{ amount, offset } => format!("add-{}-{}", amount, offset),
+      ByteCode::Set{ value, offset } => format!("set-{}-{}", value, offset),
+      ByteCode::MultiplyAdd { multiplier, source, dest} => format!("multiply-add-{}-{}-{}", multiplier, source, dest),
       ByteCode::LoopStart { end } => format!("loop-start-{}", end),
       ByteCode::LoopEnd { start } => format!("loop-end-{}", start),
-      ByteCode::Output => "output".to_string(),
+      ByteCode::Output{ offset } => format!("output-{}", offset),
       ByteCode::Input => "input".to_string(),
   })
 }
@@ -40,11 +39,11 @@ impl<'a> ModuleHelper<'a> {
   fn emit_memset(&'a self, address: &'a Value, value: u8, count: usize) {
     let context = self.context;
     let memset = self.module.get_function("llvm.memset.p0i8.i32").unwrap_or_else(|| {
-      self.module.add_function("llvm.memset.p0i8.i32", Type::get::<fn(*const i8, i8, i32, i32, bool)>(context))
+      self.module.add_function("llvm.memset.p0i8.i32", Type::get::<fn(*const i8, i8, i32, bool)>(context))
     });
 
    self.builder.build_call(memset, &[ address, value.compile(context), (count as i32).compile(context),
-                                      0i32.compile(context), false.compile(context)
+                                      false.compile(context)
                                     ]);
   }
 }
@@ -120,7 +119,7 @@ impl<'a> BufferedWriter<'a> {
 
       let cond = builder.build_cmp(character, 10u8.compile(context), Predicate::Equal);
       let cond = builder.build_call(expect, &[ cond, false.compile(context) ]);
-      builder.build_cond_br(cond, do_write, Some(no_write));
+      builder.build_cond_br(cond, do_write, no_write);
 
 
       builder.position_at_end(do_write);
@@ -160,7 +159,7 @@ impl<'a> BufferedWriter<'a> {
       builder.position_at_end(entry);
 
       let cond = builder.build_cmp(output_buffer_size, 0usize.compile(context), Predicate::GreaterThan);
-      builder.build_cond_br(cond, do_write, Some(no_write));
+      builder.build_cond_br(cond, do_write, no_write);
 
       builder.position_at_end(do_write);
       let output_buffer_start = self.module_helper.emit_address_of_first_element(output_buffer);
@@ -188,9 +187,13 @@ impl<'a> StackFrame<'a> {
     let builder = module_helper.builder;
 
     let tape = builder.build_alloca(ArrayType::new(Type::get::<u8>(context), TAPE_SIZE));
+    tape.set_name("tape");
     let output_buffer = builder.build_alloca(ArrayType::new(Type::get::<u8>(context), OUTPUT_BUFFER_SIZE));
+    output_buffer.set_name("output_buffer");
     let tape_head = builder.build_alloca(Type::get::<usize>(context));
+    tape_head.set_name("tape_head");
     let output_buffer_size = builder.build_alloca(Type::get::<usize>(context));
+    output_buffer_size.set_name("output_buffer_size");
 
     module_helper.emit_memset(module_helper.emit_address_of_first_element(tape), 0, TAPE_SIZE);
     module_helper.emit_memset(module_helper.emit_address_of_first_element(output_buffer), 0, OUTPUT_BUFFER_SIZE);
@@ -220,9 +223,13 @@ impl<'a> InstructionHelper<'a> {
     self.module_helper.builder
   }
 
-  fn emit_move_tape_head<F>(&'a self, f: F, amount: usize) where F: Fn(&'a Builder, &'a Value, &'a Value) -> &'a Value {
+  fn emit_move_tape_head(&'a self, amount: isize) {
     let value = self.builder().build_load(self.stack_frame.tape_head);
-    let updated_value = f(self.builder(), value, amount.compile(self.context()));
+    let updated_value = if amount > 0 {
+      self.builder().build_add(value, amount.compile(self.context()))
+    } else {
+      self.builder().build_sub(value, amount.abs().compile(self.context()))
+    };
     self.builder().build_store(updated_value, self.stack_frame.tape_head);
   }
 
@@ -239,16 +246,35 @@ impl<'a> InstructionHelper<'a> {
     self.builder().build_load(address)
   }
 
-  fn emit_mutate_value_at_tape_head<F>(&'a self, offset: i32, f: F, amount: u8) where F: Fn(&'a Builder, &'a Value, &'a Value) -> &'a Value {
+  fn emit_mutate_value_at_tape_head(&'a self, offset: i32, amount: i8) {
     let addr = self.emit_address_of_value_at_tape_head(offset);
     let value = self.builder().build_load(addr);
-    let updated_value = f(self.builder(), value, amount.compile(self.context()));
+    let updated_value = if amount > 0 {
+      self.builder().build_add(value, amount.compile(self.context()))
+    } else {
+      self.builder().build_sub(value, amount.abs().compile(self.context()))
+    };
     self.builder().build_store(updated_value, addr);
   }
 
   fn emit_set_value_at_tape_head(&'a self, offset: i32, value: u8) {
     let addr = self.emit_address_of_value_at_tape_head(offset);
     self.builder().build_store(value.compile(self.context()), addr);
+  }
+
+  fn emit_multiply_add(&self, multiplier: i8, source: i32, dest: i32) {
+      let source_addr = self.emit_address_of_value_at_tape_head(source);
+      let source_value = self.builder().build_load(source_addr);
+      let multiplied_value = self.builder().build_mul(source_value, multiplier.abs().compile(self.context()));
+
+      let dest_addr = self.emit_address_of_value_at_tape_head(dest);
+      let dest_value = self.builder().build_load(dest_addr);
+      let updated_value = if multiplier > 0 {
+        self.builder().build_add(dest_value, multiplied_value)
+      } else {
+        self.builder().build_sub(dest_value, multiplied_value)
+      };
+      self.builder().build_store(updated_value, dest_addr);
   }
 }
 
@@ -283,23 +309,23 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
     let next_block = blocks[i + 1];
     builder.position_at_end(block);
     match instruction {
-      ByteCode::MoveLeft(amount) => helper.emit_move_tape_head(Builder::build_sub, amount),
-      ByteCode::MoveRight(amount) => helper.emit_move_tape_head(Builder::build_add, amount),
+      ByteCode::Move(amount) => helper.emit_move_tape_head(amount),
 
-      ByteCode::Add(amount, offset) => helper.emit_mutate_value_at_tape_head(offset, Builder::build_add, amount),
-      ByteCode::Subtract(amount, offset) => helper.emit_mutate_value_at_tape_head(offset, Builder::build_sub, amount),
-      ByteCode::Set(value, offset) => helper.emit_set_value_at_tape_head(offset, value),
+      ByteCode::Add{ amount, offset } => helper.emit_mutate_value_at_tape_head(offset, amount),
+      ByteCode::Set{ value, offset } => helper.emit_set_value_at_tape_head(offset, value),
+
+      ByteCode::MultiplyAdd { multiplier, source, dest } => helper.emit_multiply_add(multiplier, source, dest),
 
       ByteCode::LoopStart { end } => {
         let value = helper.emit_load_value_at_tape_head(0);
         let cond = builder.build_cmp(value, 0u8.compile(&context), Predicate::Equal);
         let true_block = blocks[end + 1];
-        builder.build_cond_br(cond, true_block, Some(next_block));
+        builder.build_cond_br(cond, true_block, next_block);
       }
       ByteCode::LoopEnd { start } => { builder.build_br(blocks[start]); }
 
-      ByteCode::Output => {
-        let value = helper.emit_load_value_at_tape_head(0);
+      ByteCode::Output { offset } => {
+        let value = helper.emit_load_value_at_tape_head(offset);
         let size = builder.build_load(stack_frame.output_buffer_size);
         let result = builder.build_call(writer.buffered_write(), &[ stack_frame.output_buffer, size, value ]);
         builder.build_store(result, stack_frame.output_buffer_size);
@@ -327,8 +353,15 @@ pub fn execute_bytecode(instructions: &Vec<ByteCode>) {
   module.write_bitcode("/tmp/out.bc").unwrap();
   module.verify().unwrap();
 
+  module.optimize(2, 3);
+  module.write_bitcode("/tmp/out.opt.bc").unwrap();
+
   // FIXME: JITEngine doesn't appear to link the calls to external functions correctly.
   // They jump into unmapped memory.
   let ee = JitEngine::new(&module, JitOptions {opt_level: 3}).unwrap();
   ee.run_function(function, &[ &0.to_generic(&context) ]);
+
+  // FIXME: This dance is required to avoid a crash when the module is dropped.
+  drop(ee);
+  std::mem::forget(module);
 }

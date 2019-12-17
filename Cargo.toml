@@ -7,7 +7,7 @@ edition = "2018"
 [features]
 default = []
 
-llvm = ["llvm-alt"]
+llvm = ["llvm-rs"]
 
 [dependencies]
 argparse = "0.2.2"
@@ -17,7 +17,7 @@ unreachable = "1.0.0"
 vec_map = "0.8.1"
 syscall = "0.2.1"
 
-[dependencies.llvm-alt]
-git = "https://github.com/TomBebbington/llvm-rs.git"
-rev = "e12320221a4590d5c658306539b235b103651fda"
+[dependencies.llvm-rs]
+git = "https://github.com/lapz/llvm-rs/"
+rev = "30e52531a580d4b73545731394317277a3ccb84f"
 optional = true
