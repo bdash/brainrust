@@ -235,14 +235,14 @@ impl<'a> InstructionHelper<'a> {
 
   fn emit_address_of_value_at_tape_head(&self, offset: i32) -> &Value {
     let index = self.builder().build_load(self.stack_frame.tape_head);
-    let index = self.builder().build_add(index, (offset as i64).compile(self.context()));
+    let index = if offset == 0 { index } else {
+      self.builder().build_add(index, (offset as i64).compile(self.context()))
+    };
     self.builder().build_gep(self.stack_frame.tape, &[ 0.compile(self.context()), index ])
   }
 
   fn emit_load_value_at_tape_head(&self, offset: i32) -> &Value {
-    let index = self.builder().build_load(self.stack_frame.tape_head);
-    let index = self.builder().build_add(index, (offset as i64).compile(self.context()));
-    let address = self.builder().build_gep(self.stack_frame.tape, &[ 0.compile(self.context()), index ]);
+    let address = self.emit_address_of_value_at_tape_head(offset);
     self.builder().build_load(address)
   }
 
@@ -263,8 +263,7 @@ impl<'a> InstructionHelper<'a> {
   }
 
   fn emit_multiply_add(&self, multiplier: i8, source: i32, dest: i32) {
-      let source_addr = self.emit_address_of_value_at_tape_head(source);
-      let source_value = self.builder().build_load(source_addr);
+      let source_value = self.emit_load_value_at_tape_head(source);
       let multiplied_value = self.builder().build_mul(source_value, multiplier.abs().compile(self.context()));
 
       let dest_addr = self.emit_address_of_value_at_tape_head(dest);
