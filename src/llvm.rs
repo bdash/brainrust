@@ -31,12 +31,12 @@ impl<'a> ModuleHelper<'a> {
     ModuleHelper { context, module, builder }
   }
 
-  fn emit_address_of_first_element(&'a self, array: &'a Value) -> &'a Value {
+  fn emit_address_of_first_element(&self, array: &Value) -> &'a Value {
     let zero = 0.compile(self.context);
     self.builder.build_gep(array, &[ zero, zero ])
   }
 
-  fn emit_memset(&'a self, address: &'a Value, value: u8, count: usize) {
+  fn emit_memset(&self, address: &Value, value: u8, count: usize) {
     let context = self.context;
     let memset = self.module.get_function("llvm.memset.p0i8.i32").unwrap_or_else(|| {
       self.module.add_function("llvm.memset.p0i8.i32", Type::get::<fn(*const i8, i8, i32, bool)>(context))
@@ -86,7 +86,7 @@ impl<'a> BufferedWriter<'a> {
     self.module().get_function("flush_buffered_writes").unwrap()
   }
 
-  fn emit_buffered_write_function(&'a self) -> &Function {
+  fn emit_buffered_write_function(&self) -> &Function {
     let context = self.context();
     let module = self.module();
     let builder = self.builder();
@@ -136,7 +136,7 @@ impl<'a> BufferedWriter<'a> {
     function
   }
 
-  fn emit_flush_buffered_writes_function(&'a self) -> &'a mut Function {
+  fn emit_flush_buffered_writes_function(&self) -> &mut Function {
     let context = self.context();
     let module = self.module();
     let builder = self.builder();
@@ -223,7 +223,7 @@ impl<'a> InstructionHelper<'a> {
     self.module_helper.builder
   }
 
-  fn emit_move_tape_head(&'a self, amount: isize) {
+  fn emit_move_tape_head(&self, amount: isize) {
     let value = self.builder().build_load(self.stack_frame.tape_head);
     let updated_value = if amount > 0 {
       self.builder().build_add(value, amount.compile(self.context()))
@@ -233,20 +233,20 @@ impl<'a> InstructionHelper<'a> {
     self.builder().build_store(updated_value, self.stack_frame.tape_head);
   }
 
-  fn emit_address_of_value_at_tape_head(&'a self, offset: i32) -> &'a Value {
+  fn emit_address_of_value_at_tape_head(&self, offset: i32) -> &Value {
     let index = self.builder().build_load(self.stack_frame.tape_head);
     let index = self.builder().build_add(index, (offset as i64).compile(self.context()));
     self.builder().build_gep(self.stack_frame.tape, &[ 0.compile(self.context()), index ])
   }
 
-  fn emit_load_value_at_tape_head(&'a self, offset: i32) -> &'a Value {
+  fn emit_load_value_at_tape_head(&self, offset: i32) -> &Value {
     let index = self.builder().build_load(self.stack_frame.tape_head);
     let index = self.builder().build_add(index, (offset as i64).compile(self.context()));
     let address = self.builder().build_gep(self.stack_frame.tape, &[ 0.compile(self.context()), index ]);
     self.builder().build_load(address)
   }
 
-  fn emit_mutate_value_at_tape_head(&'a self, offset: i32, amount: i8) {
+  fn emit_mutate_value_at_tape_head(&self, offset: i32, amount: i8) {
     let addr = self.emit_address_of_value_at_tape_head(offset);
     let value = self.builder().build_load(addr);
     let updated_value = if amount > 0 {
@@ -257,7 +257,7 @@ impl<'a> InstructionHelper<'a> {
     self.builder().build_store(updated_value, addr);
   }
 
-  fn emit_set_value_at_tape_head(&'a self, offset: i32, value: u8) {
+  fn emit_set_value_at_tape_head(&self, offset: i32, value: u8) {
     let addr = self.emit_address_of_value_at_tape_head(offset);
     self.builder().build_store(value.compile(self.context()), addr);
   }
