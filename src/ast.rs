@@ -65,7 +65,11 @@ impl Node {
   }
 
   pub fn is_add(&self) -> bool {
-    if let self::Node::Add{..} = self { true } else { false }
+    if let Node::Add{..} = self { true } else { false }
+  }
+
+  pub fn is_loop(&self) -> bool {
+    if let Node::Loop(..) = self { true } else { false }
   }
 
   pub fn is_add_or_set(&self) -> bool {

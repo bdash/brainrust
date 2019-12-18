@@ -47,7 +47,7 @@ impl SimplifyMutationSequences {
 }
 
 impl optimizer::Transformation for SimplifyMutationSequences {
-  fn transform_block(&self, children: &[Node]) -> Vec<Node> {
+  fn transform_block(&self, children: &[Node], _is_top_level: bool) -> Vec<Node> {
     use Node::*;
 
     children.iter().group_by(|&node| node.is_add_or_set()).into_iter().flat_map(|(key, group)| {

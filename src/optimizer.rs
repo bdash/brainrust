@@ -3,6 +3,7 @@ use crate::ast::Node;
 mod loops;
 mod moves;
 mod mutations;
+mod propagate_constants;
 
 pub fn optimize_all(node: &Node) -> Vec<Node> {
   let mut optimized = vec!(node.clone());
@@ -10,12 +11,13 @@ pub fn optimize_all(node: &Node) -> Vec<Node> {
     Box::new(moves::SimplifyMoves) as Box<dyn Transformation>,
     Box::new(mutations::SimplifyMutationSequences),
     Box::new(loops::SimplifyLoops),
+    Box::new(propagate_constants::PropagateConstants)
   ];
   loop {
     let prior_length = optimized.len();
     for optimizer in &optimizers {
       let last = optimized.last().unwrap();
-      let transformed = optimizer.transform(last);
+      let transformed = optimizer.transform(last, true);
       if transformed != *last {
         optimized.push(transformed);
       }
@@ -33,17 +35,17 @@ pub fn optimize(node: &Node) -> Node {
 }
 
 trait Transformation {
-  fn transform_block(&self, children: &[Node]) -> Vec<Node>;
+  fn transform_block(&self, children: &[Node], is_top_level: bool) -> Vec<Node>;
 
-  fn transform(&self, node: &Node) -> Node {
+  fn transform(&self, node: &Node, is_top_level: bool) -> Node {
     use super::ast::Node::*;
 
     match node {
       Move(..) | Add{..} | Set{..} | MultiplyAdd{..} | Input | Output{..} => node.clone(),
-      Loop(block) => Loop(Box::new(self.transform(block))),
+      Loop(block) => Loop(Box::new(self.transform(block, false))),
       Block(children) => {
         Block(
-          self.transform_block(children).iter().map(|n| self.transform(n)).collect()
+          self.transform_block(children, is_top_level).iter().map(|n| self.transform(n, false)).collect()
         )
       }
     }

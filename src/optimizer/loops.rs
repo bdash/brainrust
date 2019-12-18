@@ -40,7 +40,7 @@ impl SimplifyLoops {
 }
 
 impl optimizer::Transformation for SimplifyLoops {
-  fn transform_block(&self, children: &[Node]) -> Vec<Node> {
+  fn transform_block(&self, children: &[Node], _is_top_level: bool) -> Vec<Node> {
     use Node::*;
 
     children.iter().flat_map(|node| {
